@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT="product-analytics-389809"
-GCS_LOCATION="US"
+GCS_LOCATION="us-central1"
 BQ_LOCATION="US"
 BUCKET="gs://${PROJECT}-retail-stores"
 DATASET="retail_stores"
