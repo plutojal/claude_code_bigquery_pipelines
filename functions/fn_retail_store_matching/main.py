@@ -335,7 +335,7 @@ def _write_results(client: bigquery.Client, matches: list[Match]) -> None:
 # ---------------------------------------------------------------------------
 
 @functions_framework.http
-def retail_store_fn_matching(request):
+def fn_retail_store_matching(request):
     client = bigquery.Client(project=PROJECT)
     _run_matching(client)
     return "OK", 200

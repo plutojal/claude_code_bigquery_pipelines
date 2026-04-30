@@ -3,8 +3,8 @@ set -euo pipefail
 
 PROJECT="product-analytics-389809"
 REGION="us-central1"
-FUNCTION_NAME="retail-store-fn-matching"
-SOURCE_DIR="functions/retail_store_fn_matching"
+FUNCTION_NAME="fn-retail-store-matching"
+SOURCE_DIR="functions/fn_retail_store_matching"
 
 echo "Deploying ${FUNCTION_NAME}..."
 
@@ -14,7 +14,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
   --gen2 \
   --runtime=python311 \
   --source="${SOURCE_DIR}" \
-  --entry-point=retail_store_fn_matching \
+  --entry-point=fn_retail_store_matching \
   --trigger-http \
   --no-allow-unauthenticated \
   --memory=1Gi \

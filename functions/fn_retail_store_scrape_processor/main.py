@@ -90,7 +90,7 @@ def process_file(bucket_name: str, file_name: str) -> None:
 
 
 @functions_framework.cloud_event
-def retail_store_fn_scrape_processor(cloud_event: CloudEvent) -> None:
+def fn_retail_store_scrape_processor(cloud_event: CloudEvent) -> None:
     data = cloud_event.data
     bucket_name = data["bucket"]
     file_name = data["name"]
