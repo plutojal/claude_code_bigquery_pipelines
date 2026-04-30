@@ -89,7 +89,7 @@ def process_file(bucket_name: str, file_name: str) -> None:
         os.unlink(tmp_path)
 
 
-@functions_framework.cloudEvent
+@functions_framework.cloud_event
 def fn_scrape_processor(cloud_event: CloudEvent) -> None:
     data = cloud_event.data
     bucket_name = data["bucket"]
