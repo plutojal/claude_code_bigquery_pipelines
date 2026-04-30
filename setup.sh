@@ -29,4 +29,10 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.${TABLE}" \
   "${SCHEMA}" || echo "Table already exists, skipping."
 
+echo "Creating views..."
+bq --project_id="${PROJECT}" query --nouse_legacy_sql \
+  "$(cat sql/views/v_sarene_comparison_daily.sql)"
+bq --project_id="${PROJECT}" query --nouse_legacy_sql \
+  "$(cat sql/views/v_salesforce_accounts.sql)"
+
 echo "Done."
