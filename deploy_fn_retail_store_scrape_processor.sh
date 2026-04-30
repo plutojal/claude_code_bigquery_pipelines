@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT="product-analytics-389809"
-REGION="us-central1"
+REGION="us"
 BUCKET="product-analytics-389809-retail-stores"
 FUNCTION_NAME="fn-retail-store-scrape-processor"
 SOURCE_DIR="functions/fn_retail_store_scrape_processor"

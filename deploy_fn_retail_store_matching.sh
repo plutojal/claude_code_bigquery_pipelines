@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT="product-analytics-389809"
-REGION="us-central1"
+REGION="us"
 FUNCTION_NAME="fn-retail-store-matching"
 SOURCE_DIR="functions/fn_retail_store_matching"
 
