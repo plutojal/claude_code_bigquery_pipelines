@@ -46,13 +46,14 @@ SOURCE_CONFIG = {
     },
     "sarene": {
         "table": f"{PROJECT}.{DATASET}.v_sarene_comparison_daily",
-        # TODO: confirm column names once Sarene schema is reviewed
-        "id_col": "id",
-        "name_col": "business_name",
-        "address_col": "address",
-        "city_col": "city",
-        "state_col": "state",
-        "zip_col": "zip",
+        # Sarene has no separate city/state/zip — address_full is the full address string.
+        # Synthetic ID built from customer_name + address_full.
+        "id_col": "CONCAT(COALESCE(customer_name,''), '|', COALESCE(address_full,''))",
+        "name_col": "customer_name",
+        "address_col": "address_full",
+        "city_col": "''",
+        "state_col": "''",
+        "zip_col": "''",
     },
     "salesforce": {
         "table": f"{PROJECT}.{DATASET}.v_salesforce_accounts",
@@ -158,16 +159,18 @@ def _places_lookup(r: Record) -> tuple[Optional[str], Optional[float], Optional[
 
 def _load_source(client: bigquery.Client, source: str) -> list[Record]:
     cfg = SOURCE_CONFIG[source]
+    state_col = cfg["state_col"]
+    where = f"WHERE {state_col} IS NOT NULL" if not state_col.startswith("'") else ""
     query = f"""
         SELECT
             CAST({cfg['id_col']}    AS STRING) AS source_id,
             {cfg['name_col']}                  AS name,
             {cfg['address_col']}               AS address,
             {cfg['city_col']}                  AS city,
-            {cfg['state_col']}                 AS state,
+            {state_col}                        AS state,
             {cfg['zip_col']}                   AS zip_code
         FROM `{cfg['table']}`
-        WHERE {cfg['state_col']} IS NOT NULL
+        {where}
     """
     records = []
     for row in client.query(query).result():
@@ -252,8 +255,10 @@ def _run_matching(client: bigquery.Client) -> None:
         state = scrape.state.upper()
         run_api = state in TARGET_STATES
 
+        # Sarene has no state — all records land in bucket "". Include them for every scrape record.
+        sarene_bucket = sarene_by_state.get(state, []) + sarene_by_state.get("", [])
         sarene_rec, s_layer, s_conf, s_status, s_pid, s_lat, s_lng = _find_match(
-            scrape, sarene_exact, sarene_by_state.get(state, []), run_api
+            scrape, sarene_exact, sarene_bucket, run_api
         )
         sf_rec, sf_layer, sf_conf, sf_status, sf_pid, sf_lat, sf_lng = _find_match(
             scrape, sf_exact, sf_by_state.get(state, []), run_api
