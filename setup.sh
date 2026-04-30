@@ -30,6 +30,13 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.${TABLE}" \
   "${SCHEMA}" || echo "Table already exists, skipping."
 
+echo "Creating BigQuery table ${DATASET}.unified_businesses..."
+bq --project_id="${PROJECT}" mk \
+  --table \
+  --description="Matched businesses across scrape, Sarene, and Salesforce" \
+  "${PROJECT}:${DATASET}.unified_businesses" \
+  "schemas/unified_businesses.json" || echo "Table already exists, skipping."
+
 echo "Creating views (requires access to source datasets)..."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql \
   "$(cat sql/views/v_sarene_comparison_daily.sql)" \
