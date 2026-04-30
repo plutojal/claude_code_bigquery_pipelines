@@ -1,6 +1,7 @@
 """GCS-triggered Cloud Function — inserts normalized CSV into stores_normalized."""
 
 import csv
+import hashlib
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -24,6 +25,11 @@ STRING_COLUMNS = [
     "parsed_country", "parsed_city", "house_number", "road",
     "zip", "state", "chain_name",
 ]
+
+
+def _make_store_id(name: str, address: str, city: str, state: str) -> str:
+    key = f"{name}|{address}|{city}|{state}".lower().strip()
+    return hashlib.md5(key.encode()).hexdigest()
 
 
 def parse_bool(value: str) -> bool | None:
@@ -50,6 +56,12 @@ def load_csv(path: str, source_file: str) -> list[dict]:
             row["is_chain"] = parse_bool(raw.get("is_chain", ""))
             row["ingested_at"] = ingested_at
             row["source_file"] = source_file
+            row["store_id"] = _make_store_id(
+                raw.get("store_name", ""),
+                raw.get("address", ""),
+                raw.get("parsed_city", ""),
+                raw.get("state", ""),
+            )
             rows.append(row)
 
     return rows
