@@ -1,6 +1,7 @@
 """Daily matching function — links scrape, Sarene, and Salesforce records into unified_businesses."""
 
 import string
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -231,66 +232,6 @@ def _find_match(
     return None, "none", None, "unmatched", None, None, None
 
 
-def _run_matching(client: bigquery.Client) -> None:
-    scrape_records = _load_source(client, "scrape")
-    sarene_records = _load_source(client, "sarene")
-    sf_records = _load_source(client, "salesforce")
-
-    # Exact-match lookup dicts (layer 2)
-    sarene_exact = {r.norm: r for r in sarene_records if r.norm}
-    sf_exact = {r.norm: r for r in sf_records if r.norm}
-
-    # State-level buckets for fuzzy/API layers
-    sarene_by_state: dict[str, list[Record]] = {}
-    for r in sarene_records:
-        sarene_by_state.setdefault(r.state.upper(), []).append(r)
-
-    sf_by_state: dict[str, list[Record]] = {}
-    for r in sf_records:
-        sf_by_state.setdefault(r.state.upper(), []).append(r)
-
-    matches: list[Match] = []
-
-    for scrape in scrape_records:
-        state = scrape.state.upper()
-        run_api = state in TARGET_STATES
-
-        # Sarene has no state — all records land in bucket "". Include them for every scrape record.
-        sarene_bucket = sarene_by_state.get(state, []) + sarene_by_state.get("", [])
-        sarene_rec, s_layer, s_conf, s_status, s_pid, s_lat, s_lng = _find_match(
-            scrape, sarene_exact, sarene_bucket, run_api
-        )
-        sf_rec, sf_layer, sf_conf, sf_status, sf_pid, sf_lat, sf_lng = _find_match(
-            scrape, sf_exact, sf_by_state.get(state, []), run_api
-        )
-
-        # Pick the stronger of the two match results for record-level metadata
-        if s_status == "confirmed" or (s_status == "flagged" and sf_status != "confirmed"):
-            layer, conf, status = s_layer, s_conf, s_status
-            place_id, lat, lng = s_pid, s_lat, s_lng
-        elif sf_status in ("confirmed", "flagged"):
-            layer, conf, status = sf_layer, sf_conf, sf_status
-            place_id, lat, lng = sf_pid, sf_lat, sf_lng
-        else:
-            layer, conf, status = "none", None, "unmatched"
-            place_id, lat, lng = None, None, None
-
-        matches.append(Match(
-            business_id=str(uuid.uuid4()),
-            layer=layer,
-            confidence=conf,
-            status=status,
-            scrape=scrape,
-            sarene=sarene_rec,
-            sf=sf_rec,
-            place_id=place_id,
-            lat=lat,
-            lng=lng,
-        ))
-
-    _write_results(client, matches)
-
-
 def _rec_fields(r: Optional[Record], prefix: str) -> dict:
     if not r:
         return {f"{prefix}_{k}": None for k in ("id", "name", "address", "city", "state", "zip")}
@@ -321,18 +262,102 @@ def _to_row(m: Match) -> dict:
     }
 
 
-def _write_results(client: bigquery.Client, matches: list[Match]) -> None:
+def _run_matching(client: bigquery.Client) -> None:
+    t_start = time.time()
     table_ref = f"{PROJECT}.{DATASET}.{UNIFIED_TABLE}"
+
+    print("Loading source records...")
+    scrape_records = _load_source(client, "scrape")
+    sarene_records = _load_source(client, "sarene")
+    sf_records     = _load_source(client, "salesforce")
+    print(f"Sources loaded in {time.time() - t_start:.1f}s — "
+          f"scrape={len(scrape_records)}, sarene={len(sarene_records)}, sf={len(sf_records)}")
+
+    print("Building indexes...")
+    sarene_exact = {r.norm: r for r in sarene_records if r.norm}
+    sf_exact     = {r.norm: r for r in sf_records if r.norm}
+
+    sarene_by_state: dict[str, list[Record]] = {}
+    for r in sarene_records:
+        sarene_by_state.setdefault(r.state.upper(), []).append(r)
+
+    sf_by_state: dict[str, list[Record]] = {}
+    for r in sf_records:
+        sf_by_state.setdefault(r.state.upper(), []).append(r)
+
+    print(f"Truncating {table_ref}...")
     client.query(f"TRUNCATE TABLE `{table_ref}`").result()
-    rows = [_to_row(m) for m in matches]
-    total = len(rows)
-    for start in range(0, total, BATCH_SIZE):
-        batch = rows[start : start + BATCH_SIZE]
+
+    total = len(scrape_records)
+    written = 0
+    confirmed = 0
+    flagged = 0
+    unmatched = 0
+    batch: list[dict] = []
+
+    print(f"Matching and writing {total} scrape records in batches of {BATCH_SIZE}...")
+
+    for i, scrape in enumerate(scrape_records, 1):
+        state = scrape.state.upper()
+        run_api = state in TARGET_STATES
+
+        sarene_bucket = sarene_by_state.get(state, []) + sarene_by_state.get("", [])
+        sarene_rec, s_layer, s_conf, s_status, s_pid, s_lat, s_lng = _find_match(
+            scrape, sarene_exact, sarene_bucket, run_api
+        )
+        sf_rec, sf_layer, sf_conf, sf_status, sf_pid, sf_lat, sf_lng = _find_match(
+            scrape, sf_exact, sf_by_state.get(state, []), run_api
+        )
+
+        if s_status == "confirmed" or (s_status == "flagged" and sf_status != "confirmed"):
+            layer, conf, status = s_layer, s_conf, s_status
+            place_id, lat, lng = s_pid, s_lat, s_lng
+        elif sf_status in ("confirmed", "flagged"):
+            layer, conf, status = sf_layer, sf_conf, sf_status
+            place_id, lat, lng = sf_pid, sf_lat, sf_lng
+        else:
+            layer, conf, status = "none", None, "unmatched"
+            place_id, lat, lng = None, None, None
+
+        if status == "confirmed":
+            confirmed += 1
+        elif status == "flagged":
+            flagged += 1
+        else:
+            unmatched += 1
+
+        batch.append(_to_row(Match(
+            business_id=str(uuid.uuid4()),
+            layer=layer,
+            confidence=conf,
+            status=status,
+            scrape=scrape,
+            sarene=sarene_rec,
+            sf=sf_rec,
+            place_id=place_id,
+            lat=lat,
+            lng=lng,
+        )))
+
+        if len(batch) == BATCH_SIZE:
+            errors = client.insert_rows_json(table_ref, batch)
+            if errors:
+                raise RuntimeError(f"BigQuery insert errors at row {written}: {errors}")
+            written += len(batch)
+            batch = []
+            elapsed = time.time() - t_start
+            print(f"[{written}/{total}] written | confirmed={confirmed} flagged={flagged} "
+                  f"unmatched={unmatched} | {elapsed:.1f}s elapsed")
+
+    if batch:
         errors = client.insert_rows_json(table_ref, batch)
         if errors:
-            raise RuntimeError(f"BigQuery insert errors at row {start}: {errors}")
-        print(f"{min(start + BATCH_SIZE, total)}/{total} unified records written.")
-    print(f"Done — {total} businesses written to {table_ref}.")
+            raise RuntimeError(f"BigQuery insert errors at row {written}: {errors}")
+        written += len(batch)
+
+    elapsed = time.time() - t_start
+    print(f"Done — {written}/{total} records written to {table_ref} in {elapsed:.1f}s")
+    print(f"Summary: confirmed={confirmed} flagged={flagged} unmatched={unmatched}")
 
 
 # ---------------------------------------------------------------------------
