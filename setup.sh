@@ -2,14 +2,15 @@
 set -euo pipefail
 
 PROJECT="product-analytics-389809"
-REGION="us-central1"
+GCS_LOCATION="US"
+BQ_LOCATION="US"
 BUCKET="gs://${PROJECT}-retail-stores"
 DATASET="retail_stores"
 TABLE="stores_normalized"
 SCHEMA="schemas/stores_normalized.json"
 
 echo "Creating GCS bucket ${BUCKET}..."
-gsutil mb -p "${PROJECT}" -l "${REGION}" "${BUCKET}" || echo "Bucket already exists, skipping."
+gsutil mb -p "${PROJECT}" -l "${GCS_LOCATION}" "${BUCKET}" || echo "Bucket already exists, skipping."
 
 echo "Creating raw/ and normalized/ prefixes..."
 gsutil cp /dev/null "${BUCKET}/raw/.keep"
@@ -18,7 +19,7 @@ gsutil cp /dev/null "${BUCKET}/normalized/.keep"
 echo "Creating BigQuery dataset ${DATASET}..."
 bq --project_id="${PROJECT}" mk \
   --dataset \
-  --location="${REGION}" \
+  --location="${BQ_LOCATION}" \
   --description="Retail store scrape data" \
   "${PROJECT}:${DATASET}" || echo "Dataset already exists, skipping."
 
