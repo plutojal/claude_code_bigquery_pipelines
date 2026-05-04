@@ -40,9 +40,15 @@ bq --project_id="${PROJECT}" mk \
 echo "Creating views (requires access to source datasets)..."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql \
   "$(cat sql/views/v_sarene_comparison_daily.sql)" \
-  || echo "Warning: could not create v_sarene_comparison_daily — run sql/views/v_sarene_comparison_daily.sql manually in BigQuery console."
+  || echo "Warning: could not create v_sarene_comparison_daily — run manually in BigQuery console."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql \
   "$(cat sql/views/v_salesforce_accounts.sql)" \
-  || echo "Warning: could not create v_salesforce_accounts — run sql/views/v_salesforce_accounts.sql manually in BigQuery console."
+  || echo "Warning: could not create v_salesforce_accounts — run manually in BigQuery console."
+bq --project_id="${PROJECT}" query --nouse_legacy_sql \
+  "$(cat sql/views/v_sarene_clean.sql)" \
+  || echo "Warning: could not create v_sarene_clean — run manually in BigQuery console."
+bq --project_id="${PROJECT}" query --nouse_legacy_sql \
+  "$(cat sql/views/v_salesforce_clean.sql)" \
+  || echo "Warning: could not create v_salesforce_clean — run manually in BigQuery console."
 
 echo "Done."
