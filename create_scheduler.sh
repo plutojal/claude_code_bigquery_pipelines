@@ -4,7 +4,8 @@ set -euo pipefail
 PROJECT="product-analytics-389809"
 REGION="us-central1"
 FUNCTION_NAME="fn-retail-store-matching"
-JOB_NAME="retail-store-matching-daily"
+DAILY_JOB="retail-store-matching-daily"
+WEEKLY_JOB="retail-store-matching-weekly"
 
 FUNCTION_URI=$(gcloud functions describe "${FUNCTION_NAME}" \
   --project="${PROJECT}" \
@@ -14,26 +15,51 @@ FUNCTION_URI=$(gcloud functions describe "${FUNCTION_NAME}" \
 
 SERVICE_ACCOUNT="${PROJECT}@appspot.gserviceaccount.com"
 
-echo "Creating/updating Cloud Scheduler job: ${JOB_NAME}..."
-
-gcloud scheduler jobs create http "${JOB_NAME}" \
+echo "Creating/updating daily incremental job: ${DAILY_JOB}..."
+gcloud scheduler jobs create http "${DAILY_JOB}" \
   --project="${PROJECT}" \
   --location="${REGION}" \
   --schedule="0 12 * * *" \
-  --uri="${FUNCTION_URI}" \
+  --uri="${FUNCTION_URI}?mode=incremental" \
   --oidc-service-account-email="${SERVICE_ACCOUNT}" \
   --oidc-token-audience="${FUNCTION_URI}" \
   --http-method=POST \
-  --description="Daily store matching — runs at 12:00 UTC" \
+  --description="Daily — matches only new stores (incremental, 12:00 UTC)" \
   2>/dev/null \
-  || gcloud scheduler jobs update http "${JOB_NAME}" \
+  || gcloud scheduler jobs update http "${DAILY_JOB}" \
     --project="${PROJECT}" \
     --location="${REGION}" \
     --schedule="0 12 * * *" \
-    --uri="${FUNCTION_URI}" \
+    --uri="${FUNCTION_URI}?mode=incremental" \
     --oidc-service-account-email="${SERVICE_ACCOUNT}" \
     --oidc-token-audience="${FUNCTION_URI}" \
     --http-method=POST
 
-echo "Done. Job runs daily at 12:00 UTC."
-echo "To trigger manually: gcloud scheduler jobs run ${JOB_NAME} --project=${PROJECT} --location=${REGION}"
+echo "Creating/updating weekly full-refresh job: ${WEEKLY_JOB}..."
+gcloud scheduler jobs create http "${WEEKLY_JOB}" \
+  --project="${PROJECT}" \
+  --location="${REGION}" \
+  --schedule="0 12 * * 0" \
+  --uri="${FUNCTION_URI}?mode=full" \
+  --oidc-service-account-email="${SERVICE_ACCOUNT}" \
+  --oidc-token-audience="${FUNCTION_URI}" \
+  --http-method=POST \
+  --description="Weekly Sunday — re-matches all stores against fresh SF + Sarene data (12:00 UTC)" \
+  2>/dev/null \
+  || gcloud scheduler jobs update http "${WEEKLY_JOB}" \
+    --project="${PROJECT}" \
+    --location="${REGION}" \
+    --schedule="0 12 * * 0" \
+    --uri="${FUNCTION_URI}?mode=full" \
+    --oidc-service-account-email="${SERVICE_ACCOUNT}" \
+    --oidc-token-audience="${FUNCTION_URI}" \
+    --http-method=POST
+
+echo ""
+echo "Done."
+echo "  Daily  (incremental): ${DAILY_JOB}  — Mon-Sun 12:00 UTC, new stores only"
+echo "  Weekly (full):        ${WEEKLY_JOB} — Sundays 12:00 UTC, re-matches everything"
+echo ""
+echo "To trigger manually:"
+echo "  Incremental: gcloud scheduler jobs run ${DAILY_JOB}  --project=${PROJECT} --location=${REGION}"
+echo "  Full:        gcloud scheduler jobs run ${WEEKLY_JOB} --project=${PROJECT} --location=${REGION}"

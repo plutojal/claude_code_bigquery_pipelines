@@ -17,7 +17,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
   --entry-point=fn_retail_store_matching \
   --trigger-http \
   --allow-unauthenticated \
-  --memory=1Gi \
+  --memory=4Gi \
   --timeout=540s
 
 FUNCTION_URI=$(gcloud functions describe "${FUNCTION_NAME}" \

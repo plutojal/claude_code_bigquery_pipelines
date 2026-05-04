@@ -5,7 +5,7 @@ import string
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Iterator, Optional
 
 import functions_framework
 from google.cloud import bigquery
@@ -14,7 +14,7 @@ from rapidfuzz import fuzz
 PROJECT = "product-analytics-389809"
 DATASET = "retail_stores"
 UNIFIED_TABLE = "unified_businesses"
-BATCH_SIZE = 1000
+CHUNK_SIZE = 10_000  # rows per processing + staging-write batch
 
 # API layers (4 & 5) only run for these states — controls cost.
 TARGET_STATES = {
@@ -184,6 +184,32 @@ def _places_lookup(r: Record) -> tuple[Optional[str], Optional[float], Optional[
 # Data loading
 # ---------------------------------------------------------------------------
 
+def _store_filter(mode: str) -> str:
+    """Returns a WHERE clause that restricts which stores need processing."""
+    if mode == "incremental":
+        # Only stores not yet in unified_businesses
+        return f"WHERE store_id NOT IN (SELECT store_id FROM `{PROJECT}.{DATASET}.{UNIFIED_TABLE}`)"
+    return ""
+
+
+def _count_stores(client: bigquery.Client, mode: str) -> int:
+    sql = f"SELECT COUNT(*) AS cnt FROM `{PROJECT}.{DATASET}.stores_normalized` {_store_filter(mode)}"
+    return next(client.query(sql).result()).cnt
+
+
+def _stream_stores(client: bigquery.Client, mode: str) -> Iterator[dict]:
+    """Yields store dicts lazily from BQ — no full table load into memory."""
+    query = f"""
+        SELECT store_id, brand, store_name, address, phone, email,
+               parsed_country, parsed_city, house_number, road,
+               zip, state, is_chain, chain_name
+        FROM `{PROJECT}.{DATASET}.stores_normalized`
+        {_store_filter(mode)}
+    """
+    for row in client.query(query).result(page_size=CHUNK_SIZE):
+        yield dict(row)
+
+
 def _load_records(client: bigquery.Client, cfg: dict) -> list[Record]:
     state_col = cfg["state_col"]
     original_name_col = cfg.get("original_name_col", cfg["name_col"])
@@ -216,17 +242,6 @@ def _load_records(client: bigquery.Client, cfg: dict) -> list[Record]:
     return records
 
 
-def _load_stores(client: bigquery.Client) -> list[dict]:
-    query = f"""
-        SELECT
-            store_id, brand, store_name, address, phone, email,
-            parsed_country, parsed_city, house_number, road,
-            zip, state, is_chain, chain_name
-        FROM `{PROJECT}.{DATASET}.stores_normalized`
-    """
-    return [dict(row) for row in client.query(query).result()]
-
-
 def _build_index(
     records: list[Record],
 ) -> tuple[dict[str, Record], dict[str, Record], dict[str, list[Record]]]:
@@ -251,18 +266,90 @@ def _store_to_candidate(store: dict) -> Record:
 
 
 # ---------------------------------------------------------------------------
+# Staging write + MERGE
+# ---------------------------------------------------------------------------
+
+def _write_chunk(
+    client: bigquery.Client,
+    staging_ref: str,
+    rows: list[dict],
+    schema: list,
+    truncate: bool,
+) -> None:
+    disposition = (
+        bigquery.WriteDisposition.WRITE_TRUNCATE
+        if truncate
+        else bigquery.WriteDisposition.WRITE_APPEND
+    )
+    job_config = bigquery.LoadJobConfig(schema=schema, write_disposition=disposition)
+    client.load_table_from_json(rows, staging_ref, job_config=job_config).result()
+
+
+def _run_merge(client: bigquery.Client, table_ref: str, staging_ref: str, mode: str) -> None:
+    if mode == "incremental":
+        # Insert new stores only — existing rows untouched
+        sql = f"""
+            MERGE `{table_ref}` AS target
+            USING `{staging_ref}` AS source
+            ON target.store_id = source.store_id
+            WHEN NOT MATCHED BY TARGET THEN INSERT ROW
+        """
+    else:
+        # Full refresh: update existing, insert new, remove deleted stores
+        sql = f"""
+            MERGE `{table_ref}` AS target
+            USING `{staging_ref}` AS source
+            ON target.store_id = source.store_id
+            WHEN MATCHED THEN UPDATE SET
+                brand = source.brand,
+                store_name = source.store_name,
+                address = source.address,
+                phone = source.phone,
+                email = source.email,
+                parsed_country = source.parsed_country,
+                parsed_city = source.parsed_city,
+                house_number = source.house_number,
+                road = source.road,
+                zip = source.zip,
+                state = source.state,
+                is_chain = source.is_chain,
+                chain_name = source.chain_name,
+                sf_matched = source.sf_matched,
+                sf_account_id = source.sf_account_id,
+                sf_account_name = source.sf_account_name,
+                sf_match_layer = source.sf_match_layer,
+                sf_match_confidence = source.sf_match_confidence,
+                sf_match_status = source.sf_match_status,
+                distributor_matches = source.distributor_matches,
+                on_salesforce = source.on_salesforce,
+                on_any_distributor = source.on_any_distributor,
+                place_id = source.place_id,
+                lat = source.lat,
+                lng = source.lng,
+                matched_at = source.matched_at,
+                run_date = source.run_date
+            WHEN NOT MATCHED BY TARGET THEN INSERT ROW
+            WHEN NOT MATCHED BY SOURCE THEN DELETE
+        """
+    client.query(sql).result()
+
+
+# ---------------------------------------------------------------------------
 # Main matching loop
 # ---------------------------------------------------------------------------
 
-def _run_matching(client: bigquery.Client) -> None:
+def _run_matching(client: bigquery.Client, mode: str) -> None:
     t_start = time.time()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     table_ref = f"{PROJECT}.{DATASET}.{UNIFIED_TABLE}"
     staging_ref = f"{PROJECT}.{DATASET}.unified_businesses_staging_{run_id}"
 
-    print("Loading stores_normalized...")
-    stores = _load_stores(client)
-    print(f"Loaded {len(stores)} stores.")
+    print(f"Mode: {mode}")
+    total = _count_stores(client, mode)
+    if total == 0:
+        print("No stores to process — unified_businesses is already up to date.")
+        return
+    print(f"{total} stores to process.")
 
     print("Loading Salesforce (v_salesforce_clean)...")
     sf_records = _load_records(client, SALESFORCE_CONFIG)
@@ -271,21 +358,25 @@ def _run_matching(client: bigquery.Client) -> None:
 
     dist_indexes = []
     for dist_cfg in DISTRIBUTORS:
-        print(f"Loading distributor: {dist_cfg['name']} (v_{dist_cfg['name']}_clean)...")
+        print(f"Loading distributor: {dist_cfg['name']}...")
         records = _load_records(client, dist_cfg)
         addr_exact, name_exact, by_state = _build_index(records)
         dist_indexes.append((dist_cfg["name"], records, addr_exact, name_exact, by_state))
         print(f"Loaded {len(records)} records from {dist_cfg['name']}.")
 
-    print(f"All sources loaded in {time.time() - t_start:.1f}s. Matching {len(stores)} stores...")
+    print(f"Indexes ready in {time.time() - t_start:.1f}s. Matching {total} stores...")
 
+    source_schema = client.get_table(table_ref).schema
     now = datetime.now(timezone.utc).isoformat()
     today = date.today().isoformat()
-    total = len(stores)
-    sf_matched_count = 0
-    all_rows: list[dict] = []
 
-    for i, store in enumerate(stores, 1):
+    sf_matched_count = 0
+    chunk: list[dict] = []
+    first_write = True
+    processed = 0
+
+    for store in _stream_stores(client, mode):
+        processed += 1
         candidate = _store_to_candidate(store)
         state = candidate.state.upper()
         run_api = state in TARGET_STATES
@@ -314,7 +405,7 @@ def _run_matching(client: bigquery.Client) -> None:
                 "match_status":     status if matched else None,
             })
 
-        all_rows.append({
+        chunk.append({
             "store_id":        store["store_id"],
             "brand":           store.get("brand"),
             "store_name":      store.get("store_name"),
@@ -345,60 +436,24 @@ def _run_matching(client: bigquery.Client) -> None:
             "run_date":   today,
         })
 
-        if i % BATCH_SIZE == 0 or i == total:
-            print(f"[{i}/{total}] matched | sf_matched={sf_matched_count} | {time.time() - t_start:.1f}s")
+        if len(chunk) >= CHUNK_SIZE:
+            _write_chunk(client, staging_ref, chunk, source_schema, truncate=first_write)
+            first_write = False
+            chunk = []
+            print(f"[{processed}/{total}] written to staging | sf_matched={sf_matched_count} | {time.time() - t_start:.1f}s")
 
-    print(f"Loading {total} rows to staging table {staging_ref}...")
-    source_table = client.get_table(table_ref)
-    job_config = bigquery.LoadJobConfig(
-        schema=source_table.schema,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-    )
-    job = client.load_table_from_json(all_rows, staging_ref, job_config=job_config)
-    job.result()
-    print(f"Staging load complete in {time.time() - t_start:.1f}s. Running MERGE...")
+    # Flush the final partial chunk
+    if chunk:
+        _write_chunk(client, staging_ref, chunk, source_schema, truncate=first_write)
+        print(f"[{processed}/{total}] written to staging | sf_matched={sf_matched_count} | {time.time() - t_start:.1f}s")
 
-    merge_sql = f"""
-        MERGE `{table_ref}` AS target
-        USING `{staging_ref}` AS source
-        ON target.store_id = source.store_id
-        WHEN MATCHED THEN UPDATE SET
-            brand = source.brand,
-            store_name = source.store_name,
-            address = source.address,
-            phone = source.phone,
-            email = source.email,
-            parsed_country = source.parsed_country,
-            parsed_city = source.parsed_city,
-            house_number = source.house_number,
-            road = source.road,
-            zip = source.zip,
-            state = source.state,
-            is_chain = source.is_chain,
-            chain_name = source.chain_name,
-            sf_matched = source.sf_matched,
-            sf_account_id = source.sf_account_id,
-            sf_account_name = source.sf_account_name,
-            sf_match_layer = source.sf_match_layer,
-            sf_match_confidence = source.sf_match_confidence,
-            sf_match_status = source.sf_match_status,
-            distributor_matches = source.distributor_matches,
-            on_salesforce = source.on_salesforce,
-            on_any_distributor = source.on_any_distributor,
-            place_id = source.place_id,
-            lat = source.lat,
-            lng = source.lng,
-            matched_at = source.matched_at,
-            run_date = source.run_date
-        WHEN NOT MATCHED BY TARGET THEN INSERT ROW
-        WHEN NOT MATCHED BY SOURCE THEN DELETE
-    """
-    client.query(merge_sql).result()
-
+    print(f"Running MERGE ({mode})...")
+    _run_merge(client, table_ref, staging_ref, mode)
     client.delete_table(staging_ref)
+
     elapsed = time.time() - t_start
-    print(f"Done — MERGE complete. {total} stores processed in {elapsed:.1f}s")
-    print(f"Salesforce matched: {sf_matched_count}/{total}")
+    print(f"Done — {processed} stores processed in {elapsed:.1f}s")
+    print(f"Salesforce matched: {sf_matched_count}/{processed}")
     for dist_name, dist_records, _, _, _ in dist_indexes:
         print(f"Distributor '{dist_name}': {len(dist_records)} records loaded")
 
@@ -409,6 +464,9 @@ def _run_matching(client: bigquery.Client) -> None:
 
 @functions_framework.http
 def fn_retail_store_matching(request):
+    mode = request.args.get("mode", "incremental")
+    if mode not in ("incremental", "full"):
+        return f"Invalid mode '{mode}'. Use 'incremental' or 'full'.", 400
     client = bigquery.Client(project=PROJECT)
-    _run_matching(client)
-    return "OK", 200
+    _run_matching(client, mode)
+    return f"OK ({mode})", 200
