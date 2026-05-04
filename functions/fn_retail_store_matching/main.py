@@ -52,7 +52,6 @@ DISTRIBUTORS = [
     {
         "name": "sarene",
         "table": f"{PROJECT}.{DATASET}.v_sarene_comparison_daily",
-        # Sarene has no separate city/state/zip — address_full is the full address.
         "id_col": "CONCAT(COALESCE(customer_name,''), '|', COALESCE(address_full,''))",
         "name_col": "customer_name",
         "address_col": "address_full",
@@ -61,7 +60,6 @@ DISTRIBUTORS = [
         "zip_col": "''",
     },
 ]
-
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -81,17 +79,6 @@ class Record:
         self.norm = _normalize(f"{self.address} {self.city} {self.state}")
 
 
-@dataclass
-class DistributorMatch:
-    distributor_name: str
-    matched: bool
-    customer_id: Optional[str] = None
-    customer_name: Optional[str] = None
-    match_layer: Optional[str] = None
-    match_confidence: Optional[float] = None
-    match_status: Optional[str] = None
-
-
 # ---------------------------------------------------------------------------
 # Layer 1 — normalisation
 # ---------------------------------------------------------------------------
@@ -104,7 +91,7 @@ def _normalize(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Layers 3–5 — fuzzy and API matching
+# Layers 3–5 — matching
 # ---------------------------------------------------------------------------
 
 def _fuzzy(a: Record, b: Record) -> tuple[float, str]:
@@ -124,6 +111,40 @@ def _geocode_match(a: Record, b: Record) -> bool:
 def _places_lookup(r: Record) -> tuple[Optional[str], Optional[float], Optional[float]]:
     # TODO: enable after Google Maps Places API access is granted.
     return None, None, None
+
+
+def _find_match(
+    candidate: Record,
+    exact_index: dict[str, Record],
+    state_bucket: list[Record],
+    run_api: bool,
+) -> tuple[Optional[Record], str, Optional[float], str]:
+    hit = exact_index.get(candidate.norm)
+    if hit:
+        return hit, "exact", 100.0, "confirmed"
+
+    best_rec, best_score, best_status = None, 0.0, "no_match"
+    for rec in state_bucket:
+        score, status = _fuzzy(candidate, rec)
+        if status != "no_match" and score > best_score:
+            best_rec, best_score, best_status = rec, score, status
+            if status == "confirmed":
+                break
+    if best_rec:
+        return best_rec, "fuzzy", best_score, best_status
+
+    if not run_api:
+        return None, "none", None, "unmatched"
+
+    for rec in state_bucket:
+        if _geocode_match(candidate, rec):
+            return rec, "geocoding", None, "confirmed"
+
+    place_id, _, _ = _places_lookup(candidate)
+    if place_id:
+        return None, "places", None, "confirmed"
+
+    return None, "none", None, "unmatched"
 
 
 # ---------------------------------------------------------------------------
@@ -168,54 +189,6 @@ def _load_stores(client: bigquery.Client) -> list[dict]:
     return [dict(row) for row in client.query(query).result()]
 
 
-# ---------------------------------------------------------------------------
-# Match a single candidate record against a pool
-# ---------------------------------------------------------------------------
-
-def _find_match(
-    candidate: Record,
-    exact_index: dict[str, Record],
-    state_bucket: list[Record],
-    run_api: bool,
-) -> tuple[Optional[Record], str, Optional[float], str]:
-    """Returns (record, layer, confidence, status)."""
-
-    # Layer 2: exact
-    hit = exact_index.get(candidate.norm)
-    if hit:
-        return hit, "exact", 100.0, "confirmed"
-
-    # Layer 3: fuzzy
-    best_rec, best_score, best_status = None, 0.0, "no_match"
-    for rec in state_bucket:
-        score, status = _fuzzy(candidate, rec)
-        if status != "no_match" and score > best_score:
-            best_rec, best_score, best_status = rec, score, status
-            if status == "confirmed":
-                break
-    if best_rec:
-        return best_rec, "fuzzy", best_score, best_status
-
-    if not run_api:
-        return None, "none", None, "unmatched"
-
-    # Layer 4: geocoding API (stubbed)
-    for rec in state_bucket:
-        if _geocode_match(candidate, rec):
-            return rec, "geocoding", None, "confirmed"
-
-    # Layer 5: places API (stubbed)
-    place_id, _, _ = _places_lookup(candidate)
-    if place_id:
-        return None, "places", None, "confirmed"
-
-    return None, "none", None, "unmatched"
-
-
-# ---------------------------------------------------------------------------
-# Main matching loop
-# ---------------------------------------------------------------------------
-
 def _build_index(records: list[Record]) -> tuple[dict[str, Record], dict[str, list[Record]]]:
     exact = {r.norm: r for r in records if r.norm}
     by_state: dict[str, list[Record]] = {}
@@ -235,9 +208,15 @@ def _store_to_candidate(store: dict) -> Record:
     )
 
 
+# ---------------------------------------------------------------------------
+# Main matching loop
+# ---------------------------------------------------------------------------
+
 def _run_matching(client: bigquery.Client) -> None:
     t_start = time.time()
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     table_ref = f"{PROJECT}.{DATASET}.{UNIFIED_TABLE}"
+    staging_ref = f"{PROJECT}.{DATASET}.unified_businesses_staging_{run_id}"
 
     print("Loading stores_normalized...")
     stores = _load_stores(client)
@@ -256,25 +235,19 @@ def _run_matching(client: bigquery.Client) -> None:
         dist_indexes.append((dist_cfg["name"], records, exact, by_state))
         print(f"Loaded {len(records)} records from {dist_cfg['name']}.")
 
-    print(f"All sources loaded in {time.time() - t_start:.1f}s. Truncating {table_ref}...")
-    client.query(f"TRUNCATE TABLE `{table_ref}`").result()
-
-    total = len(stores)
-    written = 0
-    sf_matched_count = 0
-    batch: list[dict] = []
+    print(f"All sources loaded in {time.time() - t_start:.1f}s. Matching {len(stores)} stores...")
 
     now = datetime.now(timezone.utc).isoformat()
     today = date.today().isoformat()
+    total = len(stores)
+    sf_matched_count = 0
+    all_rows: list[dict] = []
 
-    print(f"Matching {total} stores...")
-
-    for store in stores:
+    for i, store in enumerate(stores, 1):
         candidate = _store_to_candidate(store)
         state = candidate.state.upper()
         run_api = state in TARGET_STATES
 
-        # Salesforce match
         sf_rec, sf_layer, sf_conf, sf_status = _find_match(
             candidate, sf_exact, sf_by_state.get(state, []), run_api
         )
@@ -282,79 +255,110 @@ def _run_matching(client: bigquery.Client) -> None:
         if sf_matched:
             sf_matched_count += 1
 
-        # Distributor matches
         dist_matches = []
-        for dist_name, dist_records, dist_exact, dist_by_state in dist_indexes:
-            # Distributors without state go into "" bucket — check both
+        for dist_name, _, dist_exact, dist_by_state in dist_indexes:
             bucket = dist_by_state.get(state, []) + dist_by_state.get("", [])
             rec, layer, conf, status = _find_match(candidate, dist_exact, bucket, run_api)
             matched = status in ("confirmed", "flagged")
             dist_matches.append({
                 "distributor_name": dist_name,
                 "matched": matched,
-                "customer_id": rec.source_id if rec else None,
-                "customer_name": rec.name if rec else None,
-                "match_layer": layer if matched else None,
+                "customer_id":      rec.source_id if rec else None,
+                "customer_name":    rec.name if rec else None,
+                "match_layer":      layer if matched else None,
                 "match_confidence": conf if matched else None,
-                "match_status": status if matched else None,
+                "match_status":     status if matched else None,
             })
 
-        on_any_distributor = any(d["matched"] for d in dist_matches)
-
-        batch.append({
-            "store_id": store["store_id"],
-            "brand": store.get("brand"),
-            "store_name": store.get("store_name"),
-            "address": store.get("address"),
-            "phone": store.get("phone"),
-            "email": store.get("email"),
-            "parsed_country": store.get("parsed_country"),
-            "parsed_city": store.get("parsed_city"),
-            "house_number": store.get("house_number"),
-            "road": store.get("road"),
-            "zip": store.get("zip"),
-            "state": store.get("state"),
-            "is_chain": store.get("is_chain"),
-            "chain_name": store.get("chain_name"),
-            "sf_matched": sf_matched,
-            "sf_account_id": sf_rec.source_id if sf_rec else None,
-            "sf_account_name": sf_rec.name if sf_rec else None,
-            "sf_match_layer": sf_layer if sf_matched else None,
+        all_rows.append({
+            "store_id":        store["store_id"],
+            "brand":           store.get("brand"),
+            "store_name":      store.get("store_name"),
+            "address":         store.get("address"),
+            "phone":           store.get("phone"),
+            "email":           store.get("email"),
+            "parsed_country":  store.get("parsed_country"),
+            "parsed_city":     store.get("parsed_city"),
+            "house_number":    store.get("house_number"),
+            "road":            store.get("road"),
+            "zip":             store.get("zip"),
+            "state":           store.get("state"),
+            "is_chain":        store.get("is_chain"),
+            "chain_name":      store.get("chain_name"),
+            "sf_matched":          sf_matched,
+            "sf_account_id":       sf_rec.source_id if sf_rec else None,
+            "sf_account_name":     sf_rec.name if sf_rec else None,
+            "sf_match_layer":      sf_layer if sf_matched else None,
             "sf_match_confidence": sf_conf if sf_matched else None,
-            "sf_match_status": sf_status if sf_matched else None,
+            "sf_match_status":     sf_status if sf_matched else None,
             "distributor_matches": dist_matches,
-            "on_salesforce": sf_matched,
-            "on_any_distributor": on_any_distributor,
+            "on_salesforce":       sf_matched,
+            "on_any_distributor":  any(d["matched"] for d in dist_matches),
             "place_id": None,
-            "lat": None,
-            "lng": None,
+            "lat":      None,
+            "lng":      None,
             "matched_at": now,
-            "run_date": today,
+            "run_date":   today,
         })
 
-        if len(batch) == BATCH_SIZE:
-            errors = client.insert_rows_json(table_ref, batch)
-            if errors:
-                raise RuntimeError(f"BigQuery insert errors at row {written}: {errors}")
-            written += len(batch)
-            batch = []
-            dist_match_counts = {
-                d["distributor_name"]: sum(1 for b in batch if any(
-                    dm["distributor_name"] == d["distributor_name"] and dm["matched"]
-                    for dm in b.get("distributor_matches", [])
-                )) for d in dist_matches
-            }
-            print(f"[{written}/{total}] written | sf_matched={sf_matched_count} "
-                  f"| {time.time() - t_start:.1f}s elapsed")
+        if i % BATCH_SIZE == 0 or i == total:
+            print(f"[{i}/{total}] matched | sf_matched={sf_matched_count} | {time.time() - t_start:.1f}s")
 
-    if batch:
-        errors = client.insert_rows_json(table_ref, batch)
-        if errors:
-            raise RuntimeError(f"BigQuery insert errors at row {written}: {errors}")
-        written += len(batch)
+    # Write all rows to staging table via batch load (avoids streaming buffer issues with MERGE)
+    print(f"Loading {total} rows to staging table {staging_ref}...")
+    source_table = client.get_table(table_ref)
+    job_config = bigquery.LoadJobConfig(
+        schema=source_table.schema,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+    )
+    job = client.load_table_from_json(all_rows, staging_ref, job_config=job_config)
+    job.result()
+    print(f"Staging load complete in {time.time() - t_start:.1f}s. Running MERGE...")
 
+    # MERGE staging → unified_businesses:
+    #   existing stores → UPDATE match fields with fresh SF/distributor data
+    #   new stores      → INSERT
+    #   removed stores  → DELETE
+    merge_sql = f"""
+        MERGE `{table_ref}` AS target
+        USING `{staging_ref}` AS source
+        ON target.store_id = source.store_id
+        WHEN MATCHED THEN UPDATE SET
+            brand = source.brand,
+            store_name = source.store_name,
+            address = source.address,
+            phone = source.phone,
+            email = source.email,
+            parsed_country = source.parsed_country,
+            parsed_city = source.parsed_city,
+            house_number = source.house_number,
+            road = source.road,
+            zip = source.zip,
+            state = source.state,
+            is_chain = source.is_chain,
+            chain_name = source.chain_name,
+            sf_matched = source.sf_matched,
+            sf_account_id = source.sf_account_id,
+            sf_account_name = source.sf_account_name,
+            sf_match_layer = source.sf_match_layer,
+            sf_match_confidence = source.sf_match_confidence,
+            sf_match_status = source.sf_match_status,
+            distributor_matches = source.distributor_matches,
+            on_salesforce = source.on_salesforce,
+            on_any_distributor = source.on_any_distributor,
+            place_id = source.place_id,
+            lat = source.lat,
+            lng = source.lng,
+            matched_at = source.matched_at,
+            run_date = source.run_date
+        WHEN NOT MATCHED BY TARGET THEN INSERT ROW
+        WHEN NOT MATCHED BY SOURCE THEN DELETE
+    """
+    client.query(merge_sql).result()
+
+    client.delete_table(staging_ref)
     elapsed = time.time() - t_start
-    print(f"Done — {written}/{total} records written to {table_ref} in {elapsed:.1f}s")
+    print(f"Done — MERGE complete. {total} stores processed in {elapsed:.1f}s")
     print(f"Salesforce matched: {sf_matched_count}/{total}")
     for dist_name, dist_records, _, _ in dist_indexes:
         print(f"Distributor '{dist_name}': {len(dist_records)} records loaded")
