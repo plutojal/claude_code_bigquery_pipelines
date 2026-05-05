@@ -41,6 +41,20 @@ def parse_bool(value: str) -> bool | None:
     return None
 
 
+def _parse_float(value: str) -> float | None:
+    try:
+        return float(value.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _parse_int(value: str) -> int | None:
+    try:
+        return int(float(value.strip()))
+    except (ValueError, AttributeError):
+        return None
+
+
 def load_csv(path: str, source_file: str) -> list[dict]:
     rows = []
     ingested_at = datetime.now(timezone.utc).isoformat()
@@ -54,6 +68,8 @@ def load_csv(path: str, source_file: str) -> list[dict]:
         for raw in reader:
             row: dict = {col: raw.get(col, "").strip() or None for col in STRING_COLUMNS}
             row["is_chain"] = parse_bool(raw.get("is_chain", ""))
+            row["rating"] = _parse_float(raw.get("rating", ""))
+            row["review_count"] = _parse_int(raw.get("review_count", ""))
             row["ingested_at"] = ingested_at
             row["source_file"] = source_file
             row["store_id"] = _make_store_id(
@@ -70,13 +86,18 @@ def load_csv(path: str, source_file: str) -> list[dict]:
 def insert_rows(rows: list[dict]) -> None:
     client = bigquery.Client(project=PROJECT)
     table_ref = f"{PROJECT}.{DATASET}.{TABLE}"
+    schema = client.get_table(table_ref).schema
     total = len(rows)
+
+    job_config = bigquery.LoadJobConfig(
+        schema=schema,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+    )
 
     for start in range(0, total, BATCH_SIZE):
         batch = rows[start : start + BATCH_SIZE]
-        errors = client.insert_rows_json(table_ref, batch)
-        if errors:
-            raise RuntimeError(f"BigQuery insert errors at row {start}: {errors}")
+        job = client.load_table_from_json(batch, table_ref, job_config=job_config)
+        job.result()
         inserted = min(start + BATCH_SIZE, total)
         print(f"{inserted}/{total} rows inserted")
 
