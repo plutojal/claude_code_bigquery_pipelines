@@ -14,6 +14,8 @@
   {"name": "state",          "type": "STRING",    "mode": "NULLABLE"},
   {"name": "is_chain",       "type": "BOOLEAN",   "mode": "NULLABLE"},
   {"name": "chain_name",     "type": "STRING",    "mode": "NULLABLE"},
+  {"name": "rating",         "type": "FLOAT64",   "mode": "NULLABLE"},
+  {"name": "review_count",   "type": "INTEGER",   "mode": "NULLABLE"},
 
   {"name": "sf_matched",         "type": "BOOLEAN", "mode": "REQUIRED"},
   {"name": "sf_account_id",      "type": "STRING",  "mode": "NULLABLE"},

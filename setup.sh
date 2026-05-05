@@ -37,6 +37,13 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.unified_businesses" \
   "schemas/unified_businesses.json" || echo "Table already exists, skipping."
 
+echo "Creating BigQuery table ${DATASET}.zip_lookup..."
+bq --project_id="${PROJECT}" mk \
+  --table \
+  --description="US ZIP code lookup: lat, lng, pop density, area type" \
+  "${PROJECT}:${DATASET}.zip_lookup" \
+  "schemas/zip_lookup.json" || echo "Table already exists, skipping."
+
 echo "Creating views (requires access to source datasets)..."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql \
   "$(cat sql/views/v_sarene_comparison_daily.sql)" \
@@ -50,5 +57,14 @@ bq --project_id="${PROJECT}" query --nouse_legacy_sql \
 bq --project_id="${PROJECT}" query --nouse_legacy_sql \
   "$(cat sql/views/v_salesforce_clean.sql)" \
   || echo "Warning: could not create v_salesforce_clean — run manually in BigQuery console."
+bq --project_id="${PROJECT}" query --nouse_legacy_sql \
+  "$(cat sql/views/v_sarene_order_summary.sql)" \
+  || echo "Warning: could not create v_sarene_order_summary — run manually in BigQuery console."
+bq --project_id="${PROJECT}" query --nouse_legacy_sql \
+  "$(cat sql/views/v_dashboard_stores.sql)" \
+  || echo "Warning: could not create v_dashboard_stores — run manually in BigQuery console."
+bq --project_id="${PROJECT}" query --nouse_legacy_sql \
+  "$(cat sql/views/v_dashboard_chain_overview.sql)" \
+  || echo "Warning: could not create v_dashboard_chain_overview — run manually in BigQuery console."
 
 echo "Done."

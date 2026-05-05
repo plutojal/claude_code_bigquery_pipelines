@@ -1,0 +1,11 @@
+[
+  {"name": "zip",             "type": "STRING",  "mode": "REQUIRED"},
+  {"name": "city",            "type": "STRING",  "mode": "NULLABLE"},
+  {"name": "state",           "type": "STRING",  "mode": "NULLABLE"},
+  {"name": "county",          "type": "STRING",  "mode": "NULLABLE"},
+  {"name": "latitude",        "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "longitude",       "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "pop_density_sqmi","type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "population",      "type": "INTEGER", "mode": "NULLABLE"},
+  {"name": "area_type",       "type": "STRING",  "mode": "NULLABLE"}
+]

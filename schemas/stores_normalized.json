@@ -13,6 +13,8 @@
   {"name": "state",          "type": "STRING",    "mode": "NULLABLE"},
   {"name": "is_chain",       "type": "BOOLEAN",   "mode": "NULLABLE"},
   {"name": "chain_name",     "type": "STRING",    "mode": "NULLABLE"},
+  {"name": "rating",         "type": "FLOAT64",   "mode": "NULLABLE"},
+  {"name": "review_count",   "type": "INTEGER",   "mode": "NULLABLE"},
   {"name": "ingested_at",    "type": "TIMESTAMP", "mode": "REQUIRED"},
   {"name": "source_file",    "type": "STRING",    "mode": "REQUIRED"}
 ]
