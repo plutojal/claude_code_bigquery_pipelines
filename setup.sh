@@ -44,6 +44,19 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.zip_lookup" \
   "schemas/zip_lookup.json" || echo "Table already exists, skipping."
 
+# Add any columns introduced after initial table creation (idempotent via IF NOT EXISTS).
+echo "Applying schema migrations..."
+bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."
+  ALTER TABLE `product-analytics-389809.retail_stores.stores_normalized`
+    ADD COLUMN IF NOT EXISTS rating FLOAT64,
+    ADD COLUMN IF NOT EXISTS review_count INT64
+SQL
+bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."
+  ALTER TABLE `product-analytics-389809.retail_stores.unified_businesses`
+    ADD COLUMN IF NOT EXISTS rating FLOAT64,
+    ADD COLUMN IF NOT EXISTS review_count INT64
+SQL
+
 # Use stdin redirection (<) instead of "$(cat ...)" so that SQL comments (--)
 # and single-quoted strings are not misinterpreted as bq CLI flags.
 _run_view() {
