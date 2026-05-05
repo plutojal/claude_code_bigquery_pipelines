@@ -1,6 +1,6 @@
-brand,store_name,address,phone,email,parsed_country,parsed_city,house_number,road,zip,state,is_chain,chain_name
-CVS,CVS Pharmacy,123 Main Street,+13105550101,la.main@cvs.com,US,Los Angeles,123,Main Street,90001,CA,true,CVS
-Walgreens,Walgreens Drug Store,456 Oak Avenue,+13125550102,chicago.oak@walgreens.com,US,Chicago,456,Oak Avenue,60601,IL,true,Walgreens
-Joe's Coffee,Joe's Coffee Shop,789 Elm Street,+15125550103,joe@joescoffee.com,US,Austin,789,Elm Street,78701,TX,false,
-Target,Target,321 Broadway,+12125550104,nyc.broadway@target.com,US,New York,321,Broadway,10007,NY,true,Target
-Whole Foods,Whole Foods Market,654 Pine Road,+12065550105,seattle.pine@wholefoods.com,US,Seattle,654,Pine Road,98101,WA,true,Whole Foods Market
+brand,store_name,address,phone,email,parsed_country,parsed_city,house_number,road,zip,state,is_chain,chain_name,rating,review_count
+CVS,CVS Pharmacy,123 Main Street,+13105550101,la.main@cvs.com,US,Los Angeles,123,Main Street,90001,CA,true,CVS,3.8,142
+Walgreens,Walgreens Drug Store,456 Oak Avenue,+13125550102,chicago.oak@walgreens.com,US,Chicago,456,Oak Avenue,60601,IL,true,Walgreens,4.1,89
+Joe's Coffee,Joe's Coffee Shop,789 Elm Street,+15125550103,joe@joescoffee.com,US,Austin,789,Elm Street,78701,TX,false,,4.7,312
+Target,Target,321 Broadway,+12125550104,nyc.broadway@target.com,US,New York,321,Broadway,10007,NY,true,Target,4.2,567
+Whole Foods,Whole Foods Market,654 Pine Road,+12065550105,seattle.pine@wholefoods.com,US,Seattle,654,Pine Road,98101,WA,true,Whole Foods Market,4.5,891

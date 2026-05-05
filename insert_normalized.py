@@ -22,6 +22,20 @@ STRING_COLUMNS = [
 ]
 
 
+def _parse_float(value: str) -> float | None:
+    try:
+        return float(value.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _parse_int(value: str) -> int | None:
+    try:
+        return int(float(value.strip()))
+    except (ValueError, AttributeError):
+        return None
+
+
 def _make_store_id(name: str, address: str, city: str, state: str) -> str:
     key = f"{name}|{address}|{city}|{state}".lower().strip()
     return hashlib.md5(key.encode()).hexdigest()
@@ -50,6 +64,8 @@ def load_csv(path: str) -> list[dict]:
         for raw in reader:
             row: dict = {col: raw.get(col, "").strip() or None for col in STRING_COLUMNS}
             row["is_chain"] = parse_bool(raw.get("is_chain", ""))
+            row["rating"] = _parse_float(raw.get("rating", ""))
+            row["review_count"] = _parse_int(raw.get("review_count", ""))
             row["ingested_at"] = ingested_at
             row["source_file"] = source_file
             row["store_id"] = _make_store_id(
