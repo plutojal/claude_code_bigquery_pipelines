@@ -44,27 +44,24 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.zip_lookup" \
   "schemas/zip_lookup.json" || echo "Table already exists, skipping."
 
+# Use stdin redirection (<) instead of "$(cat ...)" so that SQL comments (--)
+# and single-quoted strings are not misinterpreted as bq CLI flags.
+_run_view() {
+  local file="$1"
+  local name
+  name=$(basename "${file}" .sql)
+  echo "Creating view ${name}..."
+  bq --project_id="${PROJECT}" query --nouse_legacy_sql < "${file}" \
+    || echo "Warning: could not create ${name} — run ${file} manually in BigQuery console."
+}
+
 echo "Creating views (requires access to source datasets)..."
-bq --project_id="${PROJECT}" query --nouse_legacy_sql \
-  "$(cat sql/views/v_sarene_comparison_daily.sql)" \
-  || echo "Warning: could not create v_sarene_comparison_daily — run manually in BigQuery console."
-bq --project_id="${PROJECT}" query --nouse_legacy_sql \
-  "$(cat sql/views/v_salesforce_accounts.sql)" \
-  || echo "Warning: could not create v_salesforce_accounts — run manually in BigQuery console."
-bq --project_id="${PROJECT}" query --nouse_legacy_sql \
-  "$(cat sql/views/v_sarene_clean.sql)" \
-  || echo "Warning: could not create v_sarene_clean — run manually in BigQuery console."
-bq --project_id="${PROJECT}" query --nouse_legacy_sql \
-  "$(cat sql/views/v_salesforce_clean.sql)" \
-  || echo "Warning: could not create v_salesforce_clean — run manually in BigQuery console."
-bq --project_id="${PROJECT}" query --nouse_legacy_sql \
-  "$(cat sql/views/v_sarene_order_summary.sql)" \
-  || echo "Warning: could not create v_sarene_order_summary — run manually in BigQuery console."
-bq --project_id="${PROJECT}" query --nouse_legacy_sql \
-  "$(cat sql/views/v_dashboard_stores.sql)" \
-  || echo "Warning: could not create v_dashboard_stores — run manually in BigQuery console."
-bq --project_id="${PROJECT}" query --nouse_legacy_sql \
-  "$(cat sql/views/v_dashboard_chain_overview.sql)" \
-  || echo "Warning: could not create v_dashboard_chain_overview — run manually in BigQuery console."
+_run_view sql/views/v_sarene_comparison_daily.sql
+_run_view sql/views/v_salesforce_accounts.sql
+_run_view sql/views/v_sarene_clean.sql
+_run_view sql/views/v_salesforce_clean.sql
+_run_view sql/views/v_sarene_order_summary.sql
+_run_view sql/views/v_dashboard_stores.sql
+_run_view sql/views/v_dashboard_chain_overview.sql
 
 echo "Done."
