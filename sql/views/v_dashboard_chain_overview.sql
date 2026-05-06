@@ -10,5 +10,6 @@ SELECT
   SUM(total_cases)               AS total_cases_ordered,
   MIN(first_order_date)          AS first_order_date
 FROM `product-analytics-389809.retail_stores.v_dashboard_stores`
+WHERE chain_name IS NOT NULL
 GROUP BY 1, 2
 ORDER BY total_stores DESC;

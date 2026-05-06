@@ -23,7 +23,7 @@ TARGET_STATES = {
 }
 
 FUZZY_AUTO = 85
-FUZZY_FLAG = 65
+FUZZY_FLAG = 75
 
 ABBREV = {
     "st": "street", "ave": "avenue", "blvd": "boulevard", "dr": "drive",
@@ -38,6 +38,16 @@ _SUFFIX_RE = re.compile(
     r"\s*\b(llc|l\.l\.c\.|inc\.?|corp\.?|ltd\.?|co\.?|company|group|holdings|incorporated)\b",
     re.IGNORECASE,
 )
+
+# Generic store-type words that inflate fuzzy name scores when shared across unrelated stores
+_NAME_STOPWORDS = frozenset({
+    "smoke", "shop", "wellness", "dispensary", "cannabis", "cbd", "hemp",
+    "liquor", "wine", "spirits", "store", "mart", "market", "pharmacy",
+    "drug", "health", "natural", "naturals", "supply", "depot", "center",
+    "centre", "place", "station", "lounge", "cafe", "bar", "grill",
+    "restaurant", "boutique", "gallery", "deli", "grocery", "food",
+    "tobacco", "vape", "vapor", "convenience",
+})
 
 # ---------------------------------------------------------------------------
 # Source configs
@@ -84,10 +94,14 @@ class Record:
     zip_code: str
     norm_addr: str = field(init=False)
     norm_name: str = field(init=False)
+    norm_name_key: str = field(init=False)
+    house_num: Optional[str] = field(init=False)
 
     def __post_init__(self):
         self.norm_addr = _normalize_addr(f"{self.address} {self.city} {self.state}")
         self.norm_name = _normalize_name(self.name)
+        self.norm_name_key = _name_key(self.norm_name)
+        self.house_num = _extract_house_num(self.norm_addr)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +121,20 @@ def _normalize_name(text: str) -> str:
     text = _SUFFIX_RE.sub("", text)
     text = text.lower().strip().translate(str.maketrans("", "", string.punctuation))
     return " ".join(text.split())
+
+
+def _name_key(norm_name: str) -> str:
+    """Strips generic store-type words; returns '' when nothing meaningful remains."""
+    tokens = [t for t in norm_name.split() if t not in _NAME_STOPWORDS]
+    return " ".join(tokens)
+
+
+def _extract_house_num(norm_addr: str) -> Optional[str]:
+    """Returns the leading house number token if purely numeric, else None."""
+    if not norm_addr:
+        return None
+    first = norm_addr.split()[0]
+    return first if first.isdigit() else None
 
 
 # ---------------------------------------------------------------------------
@@ -134,10 +162,18 @@ def _find_match(
     # Layer 3: fuzzy — best of address or name similarity
     best_rec, best_score, best_status, best_layer = None, 0.0, "no_match", "fuzzy_address"
     for rec in state_bucket:
-        addr_score = fuzz.token_sort_ratio(candidate.norm_addr, rec.norm_addr)
+        # Gate address score to 0 when both sides have a house number but they differ —
+        # token_sort_ratio ignores position so "123 Main St" vs "456 Main St" scores ~90.
+        house_mismatch = (
+            candidate.house_num and rec.house_num
+            and candidate.house_num != rec.house_num
+        )
+        addr_score = 0 if house_mismatch else fuzz.token_sort_ratio(candidate.norm_addr, rec.norm_addr)
+        # Use stopword-filtered keys for name comparison to avoid generic-word inflation.
+        ck, rk = candidate.norm_name_key, rec.norm_name_key
         name_score = (
-            fuzz.token_sort_ratio(candidate.norm_name, rec.norm_name)
-            if candidate.norm_name and rec.norm_name
+            fuzz.token_sort_ratio(ck, rk)
+            if ck and rk
             else 0
         )
         score = max(addr_score, name_score)
