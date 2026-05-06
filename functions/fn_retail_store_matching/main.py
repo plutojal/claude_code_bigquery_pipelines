@@ -41,12 +41,13 @@ _SUFFIX_RE = re.compile(
 
 # Generic store-type words that inflate fuzzy name scores when shared across unrelated stores
 _NAME_STOPWORDS = frozenset({
-    "smoke", "shop", "wellness", "dispensary", "cannabis", "cbd", "hemp",
-    "liquor", "wine", "spirits", "store", "mart", "market", "pharmacy",
-    "drug", "health", "natural", "naturals", "supply", "depot", "center",
+    "smoke", "shop", "shops", "wellness", "dispensary", "cannabis", "cbd", "hemp",
+    "liquor", "liquors", "wine", "wines", "beer", "beers", "spirits", "beverage",
+    "store", "stores", "mart", "market", "markets", "pharmacy", "drug",
+    "health", "natural", "naturals", "supply", "depot", "center", "centres",
     "centre", "place", "station", "lounge", "cafe", "bar", "grill",
     "restaurant", "boutique", "gallery", "deli", "grocery", "food",
-    "tobacco", "vape", "vapor", "convenience",
+    "tobacco", "vape", "vapor", "convenience", "discount", "outlet", "express",
 })
 
 # ---------------------------------------------------------------------------
