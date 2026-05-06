@@ -18,5 +18,6 @@ SELECT
     COALESCE(BillingStreet, ''), ' ',
     COALESCE(BillingCity, ''), ' ',
     COALESCE(BillingState, '')
-  ))) AS clean_address
+  ))) AS clean_address,
+  REGEXP_EXTRACT(COALESCE(BillingPostalCode, ''), r'^(\d{5})') AS zip_code
 FROM `product-analytics-389809.salesforce_portable.account`;

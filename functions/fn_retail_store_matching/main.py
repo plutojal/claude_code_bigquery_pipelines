@@ -62,7 +62,7 @@ SALESFORCE_CONFIG = {
     "address_col": "clean_address",
     "city_col": "''",
     "state_col": "BillingState",
-    "zip_col": "''",
+    "zip_col": "zip_code",
 }
 
 # Add new distributors here — no other code changes needed.
@@ -76,7 +76,7 @@ DISTRIBUTORS = [
         "address_col": "clean_address",
         "city_col": "''",
         "state_col": "IFNULL(parsed_state, '')",
-        "zip_col": "''",
+        "zip_col": "zip_code",
     },
 ]
 
@@ -154,31 +154,45 @@ def _find_match(
     if hit:
         return hit, "exact_address", 100.0, "confirmed"
 
-    # Layer 2: exact normalised name (state-gated)
+    # Layer 2: exact normalised name (state-gated, zip-gated when available)
     if candidate.norm_name:
         hit = name_exact.get(candidate.norm_name)
         if hit and (not hit.state or hit.state.upper() == candidate.state.upper()):
-            return hit, "exact_name", 100.0, "confirmed"
+            # If both sides have a zip they must agree — same name in a different
+            # zip code is a different store (or a chain; we prefer precision).
+            zip_conflict = (
+                candidate.zip_code and hit.zip_code
+                and candidate.zip_code != hit.zip_code
+            )
+            if not zip_conflict:
+                return hit, "exact_name", 100.0, "confirmed"
 
-    # Layer 3: fuzzy — best of address or name similarity
-    best_rec, best_score, best_status, best_layer = None, 0.0, "no_match", "fuzzy_address"
+    # Layer 3: fuzzy
+    # Strategy: when both sides have a zip, require it to match and use name as the
+    # sole discriminator (zip already confirms location).  When zip is absent, fall
+    # back to the combined name + address signal with house-number gating.
+    best_rec, best_score, best_status, best_layer = None, 0.0, "no_match", "fuzzy_name"
     for rec in state_bucket:
-        # Gate address score to 0 when both sides have a house number but they differ —
-        # token_sort_ratio ignores position so "123 Main St" vs "456 Main St" scores ~90.
-        house_mismatch = (
-            candidate.house_num and rec.house_num
-            and candidate.house_num != rec.house_num
-        )
-        addr_score = 0 if house_mismatch else fuzz.token_sort_ratio(candidate.norm_addr, rec.norm_addr)
-        # Use stopword-filtered keys for name comparison to avoid generic-word inflation.
-        ck, rk = candidate.norm_name_key, rec.norm_name_key
-        name_score = (
-            fuzz.token_sort_ratio(ck, rk)
-            if ck and rk
-            else 0
-        )
-        score = max(addr_score, name_score)
-        layer = "fuzzy_name" if name_score > addr_score else "fuzzy_address"
+        both_have_zip = bool(candidate.zip_code and rec.zip_code)
+
+        if both_have_zip:
+            if candidate.zip_code != rec.zip_code:
+                continue  # different zip → definitely different store
+            ck, rk = candidate.norm_name_key, rec.norm_name_key
+            name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
+            score = name_score
+            layer = "fuzzy_name_zip"
+        else:
+            # No zip on one or both sides — use name + address, house-number gated
+            house_mismatch = (
+                candidate.house_num and rec.house_num
+                and candidate.house_num != rec.house_num
+            )
+            addr_score = 0 if house_mismatch else fuzz.token_sort_ratio(candidate.norm_addr, rec.norm_addr)
+            ck, rk = candidate.norm_name_key, rec.norm_name_key
+            name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
+            score = max(addr_score, name_score)
+            layer = "fuzzy_name" if name_score >= addr_score else "fuzzy_address"
         if score >= FUZZY_AUTO:
             status = "confirmed"
         elif score >= FUZZY_FLAG:

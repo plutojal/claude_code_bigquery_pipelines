@@ -11,6 +11,7 @@ SELECT
     r'[^\w\s]', ' '
   ))) AS clean_name,
   LOWER(TRIM(COALESCE(address_full, ''))) AS clean_address,
-  REGEXP_EXTRACT(address_full, r',\s*([A-Z]{2})\s+\d{5}') AS parsed_state
+  REGEXP_EXTRACT(address_full, r',\s*([A-Z]{2})\s+\d{5}') AS parsed_state,
+  REGEXP_EXTRACT(address_full, r'[A-Z]{2}\s+(\d{5})') AS zip_code
 FROM `product-analytics-389809.encompass_sarene.comparison_daily_report`
 WHERE customer_name IS NOT NULL;
