@@ -4,43 +4,39 @@ CREATE OR REPLACE VIEW `product-analytics-389809.retail_stores.v_dashboard_store
 WITH sarene_match AS (
   -- Extract the matched Sarene customer_id for each store (NULL if unmatched)
   SELECT
-    ub.store_id,
+    au.store_id,
     dm.customer_id AS sarene_id
-  FROM `product-analytics-389809.retail_stores.unified_businesses` ub,
-  UNNEST(ub.distributor_matches) AS dm
+  FROM `product-analytics-389809.retail_stores.account_universe` au,
+  UNNEST(au.distributor_matches) AS dm
   WHERE dm.distributor_name = 'sarene'
     AND dm.matched = TRUE
 )
 SELECT
-  ub.store_id,
-  ub.brand,
-  ub.store_name,
-  ub.chain_name,
-  ub.address,
-  ub.phone,
-  ub.email,
-  ub.parsed_country,
-  ub.parsed_city,
-  ub.house_number,
-  ub.road,
-  ub.zip,
-  ub.state,
-  ub.is_chain,
+  au.store_id,
+  au.brand,
+  au.store_name,
+  au.chain_name,
+  au.address,
+  au.phone,
+  au.email,
+  au.parsed_country,
+  au.parsed_city,
+  au.house_number,
+  au.road,
+  au.zip,
+  au.state,
+  au.is_chain,
 
   -- Scraped quality signals (populated once scraper is live)
-  ub.rating,
-  ub.review_count,
+  au.rating,
+  au.review_count,
 
   -- Match flags
-  ub.on_salesforce,
-  ub.on_any_distributor,
-  ub.sf_account_id,
-  ub.sf_account_name,
-  ub.sf_match_status,
+  au.sarene_flag,
 
   -- Location: prefer precise Places API coords, fall back to zip centroid
-  COALESCE(ub.lat, zl.latitude)  AS latitude,
-  COALESCE(ub.lng, zl.longitude) AS longitude,
+  COALESCE(au.lat, zl.latitude)  AS latitude,
+  COALESCE(au.lng, zl.longitude) AS longitude,
   zl.pop_density_sqmi,
   zl.area_type,
   zl.county,
@@ -53,12 +49,12 @@ SELECT
   so.salesmen        AS sarene_salesmen,
   so.customer_type   AS sarene_customer_type,
 
-  ub.matched_at,
-  ub.run_date
-FROM `product-analytics-389809.retail_stores.unified_businesses` ub
+  au.matched_at,
+  au.run_date
+FROM `product-analytics-389809.retail_stores.account_universe` au
 LEFT JOIN `product-analytics-389809.retail_stores.zip_lookup` zl
-  ON ub.zip = zl.zip
+  ON au.zip = zl.zip
 LEFT JOIN sarene_match sm
-  ON ub.store_id = sm.store_id
+  ON au.store_id = sm.store_id
 LEFT JOIN `product-analytics-389809.retail_stores.v_sarene_order_summary` so
   ON sm.sarene_id = so.sarene_id;

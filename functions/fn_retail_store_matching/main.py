@@ -13,7 +13,7 @@ from rapidfuzz import fuzz
 
 PROJECT = "product-analytics-389809"
 DATASET = "retail_stores"
-UNIFIED_TABLE = "unified_businesses"
+UNIFIED_TABLE = "account_universe"
 CHUNK_SIZE = 10_000  # rows per processing + staging-write batch
 
 # API layers (4 & 5) only run for these states — controls cost.
@@ -360,7 +360,7 @@ def _run_merge(client: bigquery.Client, table_ref: str, staging_ref: str, mode: 
                 rating = source.rating,
                 review_count = source.review_count,
                 distributor_matches = source.distributor_matches,
-                on_any_distributor = source.on_any_distributor,
+                sarene_flag = source.sarene_flag,
                 place_id = source.place_id,
                 lat = source.lat,
                 lng = source.lng,
@@ -448,7 +448,7 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
             "rating":          store.get("rating"),
             "review_count":    store.get("review_count"),
             "distributor_matches": dist_matches,
-            "on_any_distributor":  any(d["matched"] for d in dist_matches),
+            "sarene_flag":         any(d["matched"] for d in dist_matches),
             "place_id": None,
             "lat":      None,
             "lng":      None,
