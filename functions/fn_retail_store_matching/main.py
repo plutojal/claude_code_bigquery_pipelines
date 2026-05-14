@@ -175,12 +175,11 @@ def _find_match(
             score = name_score
             layer = "fuzzy_name_city"
         else:
-            # No city on one or both sides — use name + address, house-number gated
-            house_mismatch = (
-                candidate.house_num and rec.house_num
-                and candidate.house_num != rec.house_num
-            )
-            addr_score = 0 if house_mismatch else fuzz.token_sort_ratio(candidate.norm_addr, rec.norm_addr)
+            # No city on one or both sides — hard-skip on house-number conflict
+            if (candidate.house_num and rec.house_num
+                    and candidate.house_num != rec.house_num):
+                continue
+            addr_score = fuzz.token_sort_ratio(candidate.norm_addr, rec.norm_addr)
             ck, rk = candidate.norm_name_key, rec.norm_name_key
             name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
             score = max(addr_score, name_score)
@@ -381,12 +380,12 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
     t_start = time.time()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     table_ref = f"{PROJECT}.{DATASET}.{UNIFIED_TABLE}"
-    staging_ref = f"{PROJECT}.{DATASET}.unified_businesses_staging_{run_id}"
+    staging_ref = f"{PROJECT}.{DATASET}.account_universe_staging_{run_id}"
 
     print(f"Mode: {mode}")
     total = _count_stores(client, mode)
     if total == 0:
-        print("No stores to process — unified_businesses is already up to date.")
+        print("No stores to process — account_universe is already up to date.")
         return
     print(f"{total} stores to process.")
 

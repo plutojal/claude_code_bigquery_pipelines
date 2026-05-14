@@ -3,6 +3,7 @@
 import csv
 import hashlib
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,9 +27,24 @@ STRING_COLUMNS = [
     "zip", "state", "chain_name",
 ]
 
+_ABBREV_ID = {
+    "st": "street", "ave": "avenue", "blvd": "boulevard", "dr": "drive",
+    "rd": "road", "ln": "lane", "ct": "court", "pl": "place",
+    "hwy": "highway", "pkwy": "parkway", "rt": "route", "rte": "route",
+    "ste": "suite", "apt": "apartment",
+    "n": "north", "s": "south", "e": "east", "w": "west",
+}
 
-def _make_store_id(name: str, address: str, city: str, state: str) -> str:
-    key = f"{name}|{address}|{city}|{state}".lower().strip()
+
+def _norm_id_field(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r"[^\w\s]", " ", text.lower().strip())
+    return " ".join(_ABBREV_ID.get(t, t) for t in text.split())
+
+
+def _make_store_id(name: str, house_number: str, road: str, city: str, state: str) -> str:
+    key = f"{_norm_id_field(name)}|{_norm_id_field(house_number)}|{_norm_id_field(road)}|{_norm_id_field(city)}|{_norm_id_field(state)}"
     return hashlib.md5(key.encode()).hexdigest()
 
 
@@ -74,7 +90,8 @@ def load_csv(path: str, source_file: str) -> list[dict]:
             row["source_file"] = source_file
             row["store_id"] = _make_store_id(
                 raw.get("store_name", ""),
-                raw.get("address", ""),
+                raw.get("house_number", ""),
+                raw.get("road", ""),
                 raw.get("parsed_city", ""),
                 raw.get("state", ""),
             )
