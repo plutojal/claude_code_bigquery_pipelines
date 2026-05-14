@@ -44,6 +44,10 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.zip_lookup" \
   "schemas/zip_lookup.json" || echo "Table already exists, skipping."
 
+echo "Dropping legacy unified_businesses table (replaced by account_universe)..."
+bq --project_id="${PROJECT}" rm -f --table "${PROJECT}:${DATASET}.unified_businesses" \
+  && echo "Dropped unified_businesses." || echo "unified_businesses not found, skipping."
+
 # Add any columns introduced after initial table creation (idempotent via IF NOT EXISTS).
 echo "Applying schema migrations..."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."
