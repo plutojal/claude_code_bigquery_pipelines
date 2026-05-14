@@ -30,6 +30,13 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.${TABLE}" \
   "${SCHEMA}" || echo "Table already exists, skipping."
 
+echo "Creating BigQuery table ${DATASET}.account_universe..."
+bq --project_id="${PROJECT}" mk \
+  --table \
+  --description="Matched store records with distributor flags (account universe)" \
+  "${PROJECT}:${DATASET}.account_universe" \
+  "schemas/account_universe.json" || echo "Table already exists, skipping."
+
 echo "Creating BigQuery table ${DATASET}.zip_lookup..."
 bq --project_id="${PROJECT}" mk \
   --table \
@@ -44,6 +51,10 @@ bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: 
     ADD COLUMN IF NOT EXISTS rating FLOAT64,
     ADD COLUMN IF NOT EXISTS review_count INT64
 SQL
+bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: PK constraint skipped — BigQuery may not support it in this project tier."
+  ALTER TABLE `product-analytics-389809.retail_stores.account_universe`
+    ADD PRIMARY KEY (store_id) NOT ENFORCED
+SQL
 
 # Use stdin redirection (<) instead of "$(cat ...)" so that SQL comments (--)
 # and single-quoted strings are not misinterpreted as bq CLI flags.
@@ -55,9 +66,6 @@ _run_sql() {
   bq --project_id="${PROJECT}" query --nouse_legacy_sql < "${file}" \
     || echo "  Warning: could not run ${name} — run ${file} manually in BigQuery console."
 }
-
-echo "Creating tables..."
-_run_sql sql/tables/account_universe.sql
 
 echo "Creating views (requires access to source datasets)..."
 _run_sql sql/views/v_sarene_comparison_daily.sql
