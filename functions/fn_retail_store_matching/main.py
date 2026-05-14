@@ -236,18 +236,19 @@ def _store_filter(mode: str) -> str:
 
 
 def _count_stores(client: bigquery.Client, mode: str) -> int:
-    sql = f"SELECT COUNT(*) AS cnt FROM `{PROJECT}.{DATASET}.stores_normalized` {_store_filter(mode)}"
+    sql = f"SELECT COUNT(DISTINCT store_id) AS cnt FROM `{PROJECT}.{DATASET}.stores_normalized` {_store_filter(mode)}"
     return next(client.query(sql).result()).cnt
 
 
 def _stream_stores(client: bigquery.Client, mode: str) -> Iterator[dict]:
-    """Yields store dicts lazily from BQ — no full table load into memory."""
+    """Yields one deduplicated store dict per store_id, most recent ingestion wins."""
     query = f"""
         SELECT store_id, brand, store_name, address, phone, email,
                parsed_country, parsed_city, house_number, road,
                zip, state, is_chain, chain_name, rating, review_count
         FROM `{PROJECT}.{DATASET}.stores_normalized`
         {_store_filter(mode)}
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY store_id ORDER BY ingested_at DESC) = 1
     """
     for row in client.query(query).result(page_size=CHUNK_SIZE):
         yield dict(row)
