@@ -30,13 +30,6 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.${TABLE}" \
   "${SCHEMA}" || echo "Table already exists, skipping."
 
-echo "Creating BigQuery table ${DATASET}.unified_businesses..."
-bq --project_id="${PROJECT}" mk \
-  --table \
-  --description="Matched businesses across scrape, Sarene, and Salesforce" \
-  "${PROJECT}:${DATASET}.unified_businesses" \
-  "schemas/unified_businesses.json" || echo "Table already exists, skipping."
-
 echo "Creating BigQuery table ${DATASET}.zip_lookup..."
 bq --project_id="${PROJECT}" mk \
   --table \
@@ -51,30 +44,28 @@ bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: 
     ADD COLUMN IF NOT EXISTS rating FLOAT64,
     ADD COLUMN IF NOT EXISTS review_count INT64
 SQL
-bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."
-  ALTER TABLE `product-analytics-389809.retail_stores.unified_businesses`
-    ADD COLUMN IF NOT EXISTS rating FLOAT64,
-    ADD COLUMN IF NOT EXISTS review_count INT64
-SQL
 
 # Use stdin redirection (<) instead of "$(cat ...)" so that SQL comments (--)
 # and single-quoted strings are not misinterpreted as bq CLI flags.
-_run_view() {
+_run_sql() {
   local file="$1"
   local name
   name=$(basename "${file}" .sql)
-  echo "Creating view ${name}..."
+  echo "  ${name}..."
   bq --project_id="${PROJECT}" query --nouse_legacy_sql < "${file}" \
-    || echo "Warning: could not create ${name} — run ${file} manually in BigQuery console."
+    || echo "  Warning: could not run ${name} — run ${file} manually in BigQuery console."
 }
 
+echo "Creating tables..."
+_run_sql sql/tables/account_universe.sql
+
 echo "Creating views (requires access to source datasets)..."
-_run_view sql/views/v_sarene_comparison_daily.sql
-_run_view sql/views/v_salesforce_accounts.sql
-_run_view sql/views/v_sarene_clean.sql
-_run_view sql/views/v_salesforce_clean.sql
-_run_view sql/views/v_sarene_order_summary.sql
-_run_view sql/views/v_dashboard_stores.sql
-_run_view sql/views/v_dashboard_chain_overview.sql
+_run_sql sql/views/v_sarene_comparison_daily.sql
+_run_sql sql/views/v_sarene_clean.sql
+_run_sql sql/views/v_sarene_order_summary.sql
+_run_sql sql/views/v_distributor_account_universe.sql
+_run_sql sql/views/v_distributor_sales.sql
+_run_sql sql/views/v_dashboard_stores.sql
+_run_sql sql/views/v_dashboard_chain_overview.sql
 
 echo "Done."
