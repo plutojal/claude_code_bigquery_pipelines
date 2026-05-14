@@ -1,4 +1,4 @@
-"""Daily matching function — enriches stores_normalized with Salesforce and distributor matches."""
+"""Daily matching function — enriches stores_normalized with distributor matches."""
 
 import re
 import string
@@ -54,17 +54,6 @@ _NAME_STOPWORDS = frozenset({
 # Source configs
 # ---------------------------------------------------------------------------
 
-SALESFORCE_CONFIG = {
-    "table": f"{PROJECT}.{DATASET}.v_salesforce_clean",
-    "id_col": "Id",
-    "original_name_col": "original_name",
-    "name_col": "clean_name",
-    "address_col": "clean_address",
-    "city_col": "''",
-    "state_col": "BillingState",
-    "zip_col": "zip_code",
-}
-
 # Add new distributors here — no other code changes needed.
 DISTRIBUTORS = [
     {
@@ -74,7 +63,7 @@ DISTRIBUTORS = [
         "original_name_col": "original_name",
         "name_col": "clean_name",
         "address_col": "clean_address",
-        "city_col": "''",
+        "city_col": "IFNULL(parsed_city, '')",
         "state_col": "IFNULL(parsed_state, '')",
         "zip_col": "zip_code",
     },
@@ -96,12 +85,14 @@ class Record:
     norm_addr: str = field(init=False)
     norm_name: str = field(init=False)
     norm_name_key: str = field(init=False)
+    norm_city: str = field(init=False)
     house_num: Optional[str] = field(init=False)
 
     def __post_init__(self):
         self.norm_addr = _normalize_addr(f"{self.address} {self.city} {self.state}")
         self.norm_name = _normalize_name(self.name)
         self.norm_name_key = _name_key(self.norm_name)
+        self.norm_city = _normalize_city(self.city)
         self.house_num = _extract_house_num(self.norm_addr)
 
 
@@ -130,6 +121,12 @@ def _name_key(norm_name: str) -> str:
     return " ".join(tokens)
 
 
+def _normalize_city(text: str) -> str:
+    if not text:
+        return ""
+    return text.lower().strip()
+
+
 def _extract_house_num(norm_addr: str) -> Optional[str]:
     """Returns the leading house number token if purely numeric, else None."""
     if not norm_addr:
@@ -154,36 +151,31 @@ def _find_match(
     if hit:
         return hit, "exact_address", 100.0, "confirmed"
 
-    # Layer 2: exact normalised name (state-gated, zip-gated when available)
+    # Layer 2: exact normalised name (state-gated, city-gated when available)
     if candidate.norm_name:
         hit = name_exact.get(candidate.norm_name)
         if hit and (not hit.state or hit.state.upper() == candidate.state.upper()):
-            # If both sides have a zip they must agree — same name in a different
-            # zip code is a different store (or a chain; we prefer precision).
-            zip_conflict = (
-                candidate.zip_code and hit.zip_code
-                and candidate.zip_code != hit.zip_code
+            city_conflict = (
+                candidate.norm_city and hit.norm_city
+                and fuzz.ratio(candidate.norm_city, hit.norm_city) < 80
             )
-            if not zip_conflict:
+            if not city_conflict:
                 return hit, "exact_name", 100.0, "confirmed"
 
-    # Layer 3: fuzzy
-    # Strategy: when both sides have a zip, require it to match and use name as the
-    # sole discriminator (zip already confirms location).  When zip is absent, fall
-    # back to the combined name + address signal with house-number gating.
+    # Layer 3: fuzzy — city-gated when both sides have a city, else name+address
     best_rec, best_score, best_status, best_layer = None, 0.0, "no_match", "fuzzy_name"
     for rec in state_bucket:
-        both_have_zip = bool(candidate.zip_code and rec.zip_code)
+        both_have_city = bool(candidate.norm_city and rec.norm_city)
 
-        if both_have_zip:
-            if candidate.zip_code != rec.zip_code:
-                continue  # different zip → definitely different store
+        if both_have_city:
+            if fuzz.ratio(candidate.norm_city, rec.norm_city) < 80:
+                continue  # different city → different store
             ck, rk = candidate.norm_name_key, rec.norm_name_key
             name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
             score = name_score
-            layer = "fuzzy_name_zip"
+            layer = "fuzzy_name_city"
         else:
-            # No zip on one or both sides — use name + address, house-number gated
+            # No city on one or both sides — use name + address, house-number gated
             house_mismatch = (
                 candidate.house_num and rec.house_num
                 and candidate.house_num != rec.house_num
@@ -367,14 +359,7 @@ def _run_merge(client: bigquery.Client, table_ref: str, staging_ref: str, mode: 
                 chain_name = source.chain_name,
                 rating = source.rating,
                 review_count = source.review_count,
-                sf_matched = source.sf_matched,
-                sf_account_id = source.sf_account_id,
-                sf_account_name = source.sf_account_name,
-                sf_match_layer = source.sf_match_layer,
-                sf_match_confidence = source.sf_match_confidence,
-                sf_match_status = source.sf_match_status,
                 distributor_matches = source.distributor_matches,
-                on_salesforce = source.on_salesforce,
                 on_any_distributor = source.on_any_distributor,
                 place_id = source.place_id,
                 lat = source.lat,
@@ -404,11 +389,6 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
         return
     print(f"{total} stores to process.")
 
-    print("Loading Salesforce (v_salesforce_clean)...")
-    sf_records = _load_records(client, SALESFORCE_CONFIG)
-    sf_addr_exact, sf_name_exact, sf_by_state = _build_index(sf_records)
-    print(f"Loaded {len(sf_records)} Salesforce records.")
-
     dist_indexes = []
     for dist_cfg in DISTRIBUTORS:
         print(f"Loading distributor: {dist_cfg['name']}...")
@@ -423,7 +403,6 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
     now = datetime.now(timezone.utc).isoformat()
     today = date.today().isoformat()
 
-    sf_matched_count = 0
     chunk: list[dict] = []
     first_write = True
     processed = 0
@@ -433,13 +412,6 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
         candidate = _store_to_candidate(store)
         state = candidate.state.upper()
         run_api = state in TARGET_STATES
-
-        sf_rec, sf_layer, sf_conf, sf_status = _find_match(
-            candidate, sf_addr_exact, sf_name_exact, sf_by_state.get(state, []), run_api
-        )
-        sf_matched = sf_status in ("confirmed", "flagged")
-        if sf_matched:
-            sf_matched_count += 1
 
         dist_matches = []
         for dist_name, _, dist_addr_exact, dist_name_exact, dist_by_state in dist_indexes:
@@ -475,14 +447,7 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
             "chain_name":      store.get("chain_name"),
             "rating":          store.get("rating"),
             "review_count":    store.get("review_count"),
-            "sf_matched":          sf_matched,
-            "sf_account_id":       sf_rec.source_id if sf_rec else None,
-            "sf_account_name":     sf_rec.original_name if sf_rec else None,
-            "sf_match_layer":      sf_layer if sf_matched else None,
-            "sf_match_confidence": sf_conf if sf_matched else None,
-            "sf_match_status":     sf_status if sf_matched else None,
             "distributor_matches": dist_matches,
-            "on_salesforce":       sf_matched,
             "on_any_distributor":  any(d["matched"] for d in dist_matches),
             "place_id": None,
             "lat":      None,
@@ -495,12 +460,12 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
             _write_chunk(client, staging_ref, chunk, source_schema, truncate=first_write)
             first_write = False
             chunk = []
-            print(f"[{processed}/{total}] written to staging | sf_matched={sf_matched_count} | {time.time() - t_start:.1f}s")
+            print(f"[{processed}/{total}] written to staging | {time.time() - t_start:.1f}s")
 
     # Flush the final partial chunk
     if chunk:
         _write_chunk(client, staging_ref, chunk, source_schema, truncate=first_write)
-        print(f"[{processed}/{total}] written to staging | sf_matched={sf_matched_count} | {time.time() - t_start:.1f}s")
+        print(f"[{processed}/{total}] written to staging | {time.time() - t_start:.1f}s")
 
     print(f"Running MERGE ({mode})...")
     _run_merge(client, table_ref, staging_ref, mode)
@@ -508,7 +473,6 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
 
     elapsed = time.time() - t_start
     print(f"Done — {processed} stores processed in {elapsed:.1f}s")
-    print(f"Salesforce matched: {sf_matched_count}/{processed}")
     for dist_name, dist_records, _, _, _ in dist_indexes:
         print(f"Distributor '{dist_name}': {len(dist_records)} records loaded")
 

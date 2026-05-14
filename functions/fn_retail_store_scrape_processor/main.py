@@ -88,20 +88,46 @@ def insert_rows(rows: list[dict]) -> None:
     table_ref = f"{PROJECT}.{DATASET}.{TABLE}"
     schema = client.get_table(table_ref).schema
     total = len(rows)
-
-    job_config = bigquery.LoadJobConfig(
-        schema=schema,
-        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-    )
+    run_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    staging_ref = f"{PROJECT}.{DATASET}.{TABLE}_staging_{run_ts}"
 
     for start in range(0, total, BATCH_SIZE):
         batch = rows[start : start + BATCH_SIZE]
-        job = client.load_table_from_json(batch, table_ref, job_config=job_config)
-        job.result()
-        inserted = min(start + BATCH_SIZE, total)
-        print(f"{inserted}/{total} rows inserted")
+        disposition = (
+            bigquery.WriteDisposition.WRITE_TRUNCATE if start == 0
+            else bigquery.WriteDisposition.WRITE_APPEND
+        )
+        job_config = bigquery.LoadJobConfig(schema=schema, write_disposition=disposition)
+        client.load_table_from_json(batch, staging_ref, job_config=job_config).result()
+        print(f"{min(start + BATCH_SIZE, total)}/{total} rows staged")
 
-    print(f"Done — {total} rows inserted into {table_ref}.")
+    sql = f"""
+        MERGE `{table_ref}` AS t
+        USING `{staging_ref}` AS s
+        ON t.store_id = s.store_id
+        WHEN MATCHED THEN UPDATE SET
+            t.brand = s.brand,
+            t.store_name = s.store_name,
+            t.address = s.address,
+            t.phone = s.phone,
+            t.email = s.email,
+            t.parsed_country = s.parsed_country,
+            t.parsed_city = s.parsed_city,
+            t.house_number = s.house_number,
+            t.road = s.road,
+            t.zip = s.zip,
+            t.state = s.state,
+            t.is_chain = s.is_chain,
+            t.chain_name = s.chain_name,
+            t.rating = s.rating,
+            t.review_count = s.review_count,
+            t.ingested_at = s.ingested_at,
+            t.source_file = s.source_file
+        WHEN NOT MATCHED BY TARGET THEN INSERT ROW
+    """
+    client.query(sql).result()
+    client.delete_table(staging_ref)
+    print(f"Done — {total} rows upserted into {table_ref}.")
 
 
 def process_file(bucket_name: str, file_name: str) -> None:
