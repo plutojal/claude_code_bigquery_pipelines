@@ -156,6 +156,12 @@ def _find_match(
     # Layer 1: exact normalised address
     hit = addr_exact.get(candidate.norm_addr)
     if hit:
+        # Guard: wildly different business names at same address = scraper address collision
+        if hit.norm_name and candidate.norm_name:
+            ck = candidate.norm_name_key or candidate.norm_name
+            rk = hit.norm_name_key or hit.norm_name
+            if fuzz.token_sort_ratio(ck, rk) < 40:
+                return hit, "exact_address", float(fuzz.token_sort_ratio(ck, rk)), "flagged"
         return hit, "exact_address", 100.0, "confirmed"
 
     # Layer 2: exact normalised name (state-gated, city-gated when available)
@@ -181,9 +187,10 @@ def _find_match(
                 if fuzz.ratio(candidate.norm_city, rec.norm_city) < 86:
                     continue  # different city → different store
                 ck, rk = candidate.norm_name_key, rec.norm_name_key
-                # Fix: skip when name key is purely city tokens — no meaningful discriminator
-                # (e.g. "Glen Rock Smoke Shop" and "Ringwood Discount Liquor" both reduce to city)
-                if ck and not (set(ck.split()) - set(candidate.norm_city.split())):
+                # Fix: skip when name key is purely city/state tokens — no meaningful discriminator
+                # (e.g. "Glen Rock Smoke Shop (NJ)" reduces to "glen rock nj" after stopwords)
+                city_state_tokens = set(candidate.norm_city.split()) | {candidate.state.lower()}
+                if ck and not (set(ck.split()) - city_state_tokens):
                     continue
                 name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
                 score = name_score
