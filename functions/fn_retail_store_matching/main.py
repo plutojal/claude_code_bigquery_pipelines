@@ -39,6 +39,14 @@ _SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# FIX 1: Expand ampersand to "and" before normalisation so "Wine & Spirits" and
+# "Wine and Spirits" collapse to the same token sequence.
+_AMP_RE = re.compile(r"\s*&\s*")
+
+# FIX 2: Strip possessive apostrophes so "George's" → "georges" and "George S"
+# (after punctuation strip) also → "georges" via the same path.
+_POSSESSIVE_RE = re.compile(r"'s\b", re.IGNORECASE)
+
 # Cannabis/dispensary keywords — stores matching these are never alcohol distributor customers
 _CANNABIS_KEYWORDS = frozenset({"dispensary", "dispensaries", "cannabis", "marijuana"})
 
@@ -114,8 +122,21 @@ def _normalize_name(text: str) -> str:
     if not text:
         return ""
     text = _SUFFIX_RE.sub("", text)
+    # FIX 1: normalise & → and before stripping punctuation
+    text = _AMP_RE.sub(" and ", text)
+    # FIX 2: strip possessive 's so "George's" and "George S" both become "georges"
+    text = _POSSESSIVE_RE.sub("s", text)
     text = text.lower().strip().translate(str.maketrans("", "", string.punctuation))
-    return " ".join(text.split())
+    # FIX 3: collapse plural → singular for common suffixes so "Liquors" == "Liquor",
+    # "Wines" == "Wine", "Spirits" == "Spirit", "Shops" == "Shop" etc.
+    # We strip a trailing 's' only from tokens longer than 3 chars that are NOT
+    # already in _NAME_STOPWORDS (stopwords are matched pre-strip anyway).
+    tokens = []
+    for tok in text.split():
+        if len(tok) > 3 and tok.endswith("s") and not tok.endswith("ss"):
+            tok = tok[:-1]
+        tokens.append(tok)
+    return " ".join(tokens)
 
 
 def _name_key(norm_name: str) -> str:
@@ -151,6 +172,7 @@ def _find_match(
     addr_exact: dict[str, Record],
     name_exact: dict[str, Record],
     state_bucket: list[Record],
+    zip_bucket: list[Record],      # FIX 4: new zip-bucket parameter
     run_api: bool,
 ) -> tuple[Optional[Record], str, Optional[float], str]:
     # Layer 1: exact normalised address
@@ -168,6 +190,25 @@ def _find_match(
             )
             if not city_conflict:
                 return hit, "exact_name", 100.0, "confirmed"
+
+    # FIX 4 — Layer 2b: fuzzy name match within the same zip code.
+    # Zip is a much tighter geographic constraint than state, so we use a
+    # lower name-score threshold (FUZZY_FLAG) to catch truncated / variant names
+    # like "Ringwood Wine & Liquor" vs "Ringwood Wine & Liquors" or
+    # "Stew Leonard's Paramus - Wine Store" vs "Stew Leonards Paramus - Wine Store".
+    if candidate.zip_code and zip_bucket:
+        best_zip_rec, best_zip_score = None, 0.0
+        ck = candidate.norm_name_key
+        for rec in zip_bucket:
+            if not ck or not rec.norm_name_key:
+                continue
+            score = fuzz.token_sort_ratio(ck, rec.norm_name_key)
+            if score > best_zip_score:
+                best_zip_score = score
+                best_zip_rec = rec
+        if best_zip_rec and best_zip_score >= FUZZY_FLAG:
+            status = "confirmed" if best_zip_score >= FUZZY_AUTO else "flagged"
+            return best_zip_rec, "fuzzy_name_zip", float(best_zip_score), status
 
     # Layer 3: fuzzy — city-gated when both sides have a city, else name+address
     best_rec, best_score, best_status, best_layer = None, 0.0, "no_match", "fuzzy_name"
@@ -308,13 +349,17 @@ def _load_records(client: bigquery.Client, cfg: dict) -> list[Record]:
 
 def _build_index(
     records: list[Record],
-) -> tuple[dict[str, Record], dict[str, Record], dict[str, list[Record]]]:
+) -> tuple[dict[str, Record], dict[str, Record], dict[str, list[Record]], dict[str, list[Record]]]:
+    # FIX 4: added zip index as fourth return value
     addr_exact = {r.norm_addr: r for r in records if r.norm_addr}
     name_exact = {r.norm_name: r for r in records if r.norm_name}
     by_state: dict[str, list[Record]] = {}
+    by_zip: dict[str, list[Record]] = {}
     for r in records:
         by_state.setdefault(r.state.upper(), []).append(r)
-    return addr_exact, name_exact, by_state
+        if r.zip_code:
+            by_zip.setdefault(r.zip_code, []).append(r)
+    return addr_exact, name_exact, by_state, by_zip
 
 
 def _store_to_candidate(store: dict) -> Record:
@@ -414,8 +459,8 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
     for dist_cfg in DISTRIBUTORS:
         print(f"Loading distributor: {dist_cfg['name']}...")
         records = _load_records(client, dist_cfg)
-        addr_exact, name_exact, by_state = _build_index(records)
-        dist_indexes.append((dist_cfg["name"], records, addr_exact, name_exact, by_state))
+        addr_exact, name_exact, by_state, by_zip = _build_index(records)  # FIX 4
+        dist_indexes.append((dist_cfg["name"], records, addr_exact, name_exact, by_state, by_zip))
         print(f"Loaded {len(records)} records from {dist_cfg['name']}.")
 
     print(f"Indexes ready in {time.time() - t_start:.1f}s. Matching {total} stores...")
@@ -435,10 +480,11 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
         run_api = state in TARGET_STATES
 
         dist_matches = []
-        for dist_name, _, dist_addr_exact, dist_name_exact, dist_by_state in dist_indexes:
+        for dist_name, _, dist_addr_exact, dist_name_exact, dist_by_state, dist_by_zip in dist_indexes:  # FIX 4
             bucket = dist_by_state.get(state, []) + dist_by_state.get("", [])
+            zip_bucket = dist_by_zip.get(candidate.zip_code, []) if candidate.zip_code else []  # FIX 4
             rec, layer, conf, status = _find_match(
-                candidate, dist_addr_exact, dist_name_exact, bucket, run_api
+                candidate, dist_addr_exact, dist_name_exact, bucket, zip_bucket, run_api  # FIX 4
             )
             matched = status in ("confirmed", "flagged")
             dist_matches.append({
@@ -494,7 +540,7 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
 
     elapsed = time.time() - t_start
     print(f"Done — {processed} stores processed in {elapsed:.1f}s")
-    for dist_name, dist_records, _, _, _ in dist_indexes:
+    for dist_name, dist_records, _, _, _, _ in dist_indexes:  # FIX 4
         print(f"Distributor '{dist_name}': {len(dist_records)} records loaded")
 
 
