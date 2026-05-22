@@ -249,19 +249,26 @@ def _store_filter(mode: str) -> str:
 
 
 def _count_stores(client: bigquery.Client, mode: str) -> int:
-    sql = f"SELECT COUNT(DISTINCT store_id) AS cnt FROM `{PROJECT}.{DATASET}.stores_normalized` {_store_filter(mode)}"
+    sql = f"SELECT COUNT(DISTINCT store_id) AS cnt FROM `{PROJECT}.{DATASET}.int_matcher_input` {_store_filter(mode)}"
     return next(client.query(sql).result()).cnt
 
 
 def _stream_stores(client: bigquery.Client, mode: str) -> Iterator[dict]:
-    """Yields one deduplicated store dict per store_id, most recent ingestion wins."""
+    """Yields store dicts from the Dataform-prepared matcher input universe.
+
+    int_matcher_input is built by Dataform from stg_stores_current (deduped
+    stores_normalized, latest scrape per store_id) joined to
+    stg_hemp_eligible_retailers (active Class 44 licensees), unioned with
+    Class 44 licenses that didn't match any scraped store (synthetic store_ids
+    prefixed 'nj-abc:'). Cannabis stores are NOT filtered here — _find_match's
+    Layer 3 skip handles them, preserving the exact-match path.
+    """
     query = f"""
         SELECT store_id, brand, store_name, address, phone, email,
                parsed_country, parsed_city, house_number, road,
                zip, state, is_chain, chain_name, rating, review_count
-        FROM `{PROJECT}.{DATASET}.stores_normalized`
+        FROM `{PROJECT}.{DATASET}.int_matcher_input`
         {_store_filter(mode)}
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY store_id ORDER BY ingested_at DESC) = 1
     """
     for row in client.query(query).result(page_size=CHUNK_SIZE):
         yield dict(row)
