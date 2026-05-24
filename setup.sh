@@ -59,6 +59,10 @@ bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: 
   ALTER TABLE `product-analytics-389809.retail_stores.account_universe`
     ADD PRIMARY KEY (store_id) NOT ENFORCED
 SQL
+bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."
+  ALTER TABLE `product-analytics-389809.retail_stores.account_universe`
+    ADD COLUMN IF NOT EXISTS nj_abc_license_number STRING
+SQL
 
 # Use stdin redirection (<) instead of "$(cat ...)" so that SQL comments (--)
 # and single-quoted strings are not misinterpreted as bq CLI flags.

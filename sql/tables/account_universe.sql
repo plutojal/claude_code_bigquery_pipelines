@@ -14,8 +14,9 @@ CREATE TABLE IF NOT EXISTS `product-analytics-389809.retail_stores.account_unive
   parsed_city     STRING,
   state           STRING,
   zip             STRING,
-  parsed_country  STRING,
-  phone           STRING,
+  parsed_country        STRING,
+  nj_abc_license_number STRING,
+  phone                 STRING,
   email           STRING,
 
   -- Scraped quality signals
