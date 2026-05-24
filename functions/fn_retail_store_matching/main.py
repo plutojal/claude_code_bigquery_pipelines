@@ -307,7 +307,8 @@ def _stream_stores(client: bigquery.Client, mode: str) -> Iterator[dict]:
     query = f"""
         SELECT store_id, brand, store_name, address, phone, email,
                parsed_country, parsed_city, house_number, road,
-               zip, state, is_chain, chain_name, rating, review_count
+               zip, state, is_chain, chain_name, rating, review_count,
+               nj_abc_license_number
         FROM `{PROJECT}.{DATASET}.int_matcher_input`
         {_store_filter(mode)}
     """
@@ -425,6 +426,7 @@ def _run_merge(client: bigquery.Client, table_ref: str, staging_ref: str, mode: 
                 chain_name = source.chain_name,
                 rating = source.rating,
                 review_count = source.review_count,
+                nj_abc_license_number = source.nj_abc_license_number,
                 distributor_matches = source.distributor_matches,
                 sarene_flag = source.sarene_flag,
                 place_id = source.place_id,
@@ -514,6 +516,7 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
             "chain_name":      store.get("chain_name"),
             "rating":          store.get("rating"),
             "review_count":    store.get("review_count"),
+            "nj_abc_license_number": store.get("nj_abc_license_number"),
             "distributor_matches": dist_matches,
             "sarene_flag":         any(d["matched"] for d in dist_matches),
             "place_id": None,
