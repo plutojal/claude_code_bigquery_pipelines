@@ -317,13 +317,13 @@ def _load_all_distributor_records(client: bigquery.Client) -> dict[str, list[Rec
     query = f"""
         SELECT
             distributor                     AS distributor_name,
-            CAST(customer_id AS STRING)     AS source_id,
-            customer_name                   AS original_name,
+            CAST(account_id AS STRING)      AS source_id,
+            original_name                   AS original_name,
             clean_name                      AS name,
             clean_address                   AS address,
-            IFNULL(parsed_city, '')         AS city,
+            IFNULL(city, '')                AS city,
             IFNULL(state, '')               AS state,
-            IFNULL(zip, '')                 AS zip_code,
+            IFNULL(zip_code, '')            AS zip_code,
             net_case_volume
         FROM `{DISTRIBUTOR_TABLE}`
     """
