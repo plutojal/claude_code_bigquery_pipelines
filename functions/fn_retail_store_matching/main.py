@@ -83,6 +83,7 @@ class Record:
     city: str
     state: str
     zip_code: str
+    net_case_volume: Optional[float] = field(default=None)
     norm_addr: str = field(init=False)
     norm_name: str = field(init=False)
     norm_name_key: str = field(init=False)
@@ -322,7 +323,8 @@ def _load_all_distributor_records(client: bigquery.Client) -> dict[str, list[Rec
             clean_address                   AS address,
             IFNULL(parsed_city, '')         AS city,
             IFNULL(state, '')               AS state,
-            IFNULL(zip, '')                 AS zip_code
+            IFNULL(zip, '')                 AS zip_code,
+            net_case_volume
         FROM `{DISTRIBUTOR_TABLE}`
     """
     by_dist: dict[str, list[Record]] = {}
@@ -335,6 +337,7 @@ def _load_all_distributor_records(client: bigquery.Client) -> dict[str, list[Rec
             city=row.city or "",
             state=row.state or "",
             zip_code=row.zip_code or "",
+            net_case_volume=row.net_case_volume,
         )
         by_dist.setdefault(row.distributor_name, []).append(rec)
     return by_dist
@@ -482,13 +485,14 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
             )
             matched = status in ("confirmed", "flagged")
             dist_matches.append({
-                "distributor_name": dist_name,
-                "matched": matched,
-                "customer_id":      rec.source_id if rec else None,
-                "customer_name":    rec.original_name if rec else None,
-                "match_layer":      layer if matched else None,
-                "match_confidence": conf if matched else None,
-                "match_status":     status if matched else None,
+                "distributor_name":  dist_name,
+                "matched":           matched,
+                "customer_id":       rec.source_id if rec else None,
+                "customer_name":     rec.original_name if rec else None,
+                "match_layer":       layer if matched else None,
+                "match_confidence":  conf if matched else None,
+                "match_status":      status if matched else None,
+                "net_case_volume":   rec.net_case_volume if rec else None,
             })
 
         chunk.append({
