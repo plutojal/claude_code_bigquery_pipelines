@@ -316,7 +316,7 @@ def _load_all_distributor_records(client: bigquery.Client) -> dict[str, list[Rec
     """
     query = f"""
         SELECT
-            distributor_name,
+            distributor                     AS distributor_name,
             CAST(customer_id AS STRING)     AS source_id,
             customer_name                   AS original_name,
             clean_name                      AS name,
