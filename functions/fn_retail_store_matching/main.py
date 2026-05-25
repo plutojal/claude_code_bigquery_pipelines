@@ -66,17 +66,19 @@ _NAME_STOPWORDS = frozenset({
 # ---------------------------------------------------------------------------
 
 # Add new distributors here — no other code changes needed.
+# int_distributor_account_universe is the Dataform-managed union of all distributor
+# account universes; new distributors are added there, not here.
 DISTRIBUTORS = [
     {
         "name": "sarene",
-        "table": f"{PROJECT}.{DATASET}.v_sarene_clean",
-        "id_col": "sarene_id",
-        "original_name_col": "original_name",
+        "table": f"{PROJECT}.{DATASET}.int_distributor_account_universe",
+        "id_col": "customer_id",
+        "original_name_col": "customer_name",
         "name_col": "clean_name",
         "address_col": "clean_address",
         "city_col": "IFNULL(parsed_city, '')",
-        "state_col": "IFNULL(parsed_state, '')",
-        "zip_col": "zip_code",
+        "state_col": "IFNULL(state, '')",
+        "zip_col": "zip",
     },
 ]
 

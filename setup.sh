@@ -44,10 +44,6 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.zip_lookup" \
   "schemas/zip_lookup.json" || echo "Table already exists, skipping."
 
-echo "Dropping legacy unified_businesses table (replaced by account_universe)..."
-bq --project_id="${PROJECT}" rm -f --table "${PROJECT}:${DATASET}.unified_businesses" \
-  && echo "Dropped unified_businesses." || echo "unified_businesses not found, skipping."
-
 # Add any columns introduced after initial table creation (idempotent via IF NOT EXISTS).
 echo "Applying schema migrations..."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."
@@ -63,25 +59,5 @@ bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: 
   ALTER TABLE `product-analytics-389809.retail_stores.account_universe`
     ADD COLUMN IF NOT EXISTS nj_abc_license_number STRING
 SQL
-
-# Use stdin redirection (<) instead of "$(cat ...)" so that SQL comments (--)
-# and single-quoted strings are not misinterpreted as bq CLI flags.
-_run_sql() {
-  local file="$1"
-  local name
-  name=$(basename "${file}" .sql)
-  echo "  ${name}..."
-  bq --project_id="${PROJECT}" query --nouse_legacy_sql < "${file}" \
-    || echo "  Warning: could not run ${name} — run ${file} manually in BigQuery console."
-}
-
-echo "Creating views (requires access to source datasets)..."
-_run_sql sql/views/v_sarene_comparison_daily.sql
-_run_sql sql/views/v_sarene_clean.sql
-_run_sql sql/views/v_sarene_order_summary.sql
-_run_sql sql/views/v_distributor_account_universe.sql
-_run_sql sql/views/v_distributor_sales.sql
-_run_sql sql/views/v_dashboard_stores.sql
-_run_sql sql/views/v_dashboard_chain_overview.sql
 
 echo "Done."
