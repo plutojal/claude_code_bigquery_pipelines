@@ -62,25 +62,13 @@ _NAME_STOPWORDS = frozenset({
 })
 
 # ---------------------------------------------------------------------------
-# Source configs
+# Source config
 # ---------------------------------------------------------------------------
 
-# Add new distributors here — no other code changes needed.
-# int_distributor_account_universe is the Dataform-managed union of all distributor
-# account universes; new distributors are added there, not here.
-DISTRIBUTORS = [
-    {
-        "name": "sarene",
-        "table": f"{PROJECT}.{DATASET}.int_distributor_account_universe",
-        "id_col": "customer_id",
-        "original_name_col": "customer_name",
-        "name_col": "clean_name",
-        "address_col": "clean_address",
-        "city_col": "IFNULL(parsed_city, '')",
-        "state_col": "IFNULL(state, '')",
-        "zip_col": "zip",
-    },
-]
+# All distributors are sourced from this single Dataform-managed table.
+# Adding a new distributor to int_distributor_account_universe automatically
+# picks it up here with no code changes required.
+DISTRIBUTOR_TABLE = f"{PROJECT}.{DATASET}.int_distributor_account_universe"
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -318,27 +306,28 @@ def _stream_stores(client: bigquery.Client, mode: str) -> Iterator[dict]:
         yield dict(row)
 
 
-def _load_records(client: bigquery.Client, cfg: dict) -> list[Record]:
-    state_col = cfg["state_col"]
-    original_name_col = cfg.get("original_name_col", cfg["name_col"])
-    # Only add WHERE clause for plain column names, not literals ('') or expressions (IFNULL(...))
-    is_plain_col = "'" not in state_col and "(" not in state_col
-    where = f"WHERE {state_col} IS NOT NULL" if is_plain_col else ""
+def _load_all_distributor_records(client: bigquery.Client) -> dict[str, list[Record]]:
+    """Load every row from DISTRIBUTOR_TABLE and group by distributor_name.
+
+    Returns a dict mapping distributor_name → list[Record].  Any distributor
+    added to int_distributor_account_universe in Dataform is automatically
+    included here without touching this file.
+    """
     query = f"""
         SELECT
-            CAST({cfg['id_col']} AS STRING) AS source_id,
-            {original_name_col}             AS original_name,
-            {cfg['name_col']}               AS name,
-            {cfg['address_col']}            AS address,
-            {cfg['city_col']}               AS city,
-            {state_col}                     AS state,
-            {cfg['zip_col']}                AS zip_code
-        FROM `{cfg['table']}`
-        {where}
+            distributor_name,
+            CAST(customer_id AS STRING)     AS source_id,
+            customer_name                   AS original_name,
+            clean_name                      AS name,
+            clean_address                   AS address,
+            IFNULL(parsed_city, '')         AS city,
+            IFNULL(state, '')               AS state,
+            IFNULL(zip, '')                 AS zip_code
+        FROM `{DISTRIBUTOR_TABLE}`
     """
-    records = []
+    by_dist: dict[str, list[Record]] = {}
     for row in client.query(query).result():
-        records.append(Record(
+        rec = Record(
             source_id=row.source_id or "",
             original_name=row.original_name or "",
             name=row.name or "",
@@ -346,8 +335,9 @@ def _load_records(client: bigquery.Client, cfg: dict) -> list[Record]:
             city=row.city or "",
             state=row.state or "",
             zip_code=row.zip_code or "",
-        ))
-    return records
+        )
+        by_dist.setdefault(row.distributor_name, []).append(rec)
+    return by_dist
 
 
 def _build_index(
@@ -459,13 +449,13 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
         return
     print(f"{total} stores to process.")
 
+    print(f"Loading distributors from {DISTRIBUTOR_TABLE}...")
+    all_dist_records = _load_all_distributor_records(client)
     dist_indexes = []
-    for dist_cfg in DISTRIBUTORS:
-        print(f"Loading distributor: {dist_cfg['name']}...")
-        records = _load_records(client, dist_cfg)
-        addr_exact, name_exact, by_state, by_zip = _build_index(records)  # FIX 4
-        dist_indexes.append((dist_cfg["name"], records, addr_exact, name_exact, by_state, by_zip))
-        print(f"Loaded {len(records)} records from {dist_cfg['name']}.")
+    for dist_name, records in all_dist_records.items():
+        addr_exact, name_exact, by_state, by_zip = _build_index(records)
+        dist_indexes.append((dist_name, records, addr_exact, name_exact, by_state, by_zip))
+        print(f"  {dist_name}: {len(records)} records loaded.")
 
     print(f"Indexes ready in {time.time() - t_start:.1f}s. Matching {total} stores...")
 
