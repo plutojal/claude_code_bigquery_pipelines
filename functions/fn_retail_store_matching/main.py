@@ -180,7 +180,14 @@ def _find_match(
                 and fuzz.ratio(candidate.norm_city, hit.norm_city) < 80
             )
             if not city_conflict:
-                return hit, "exact_name", 100.0, "confirmed"
+                # When candidate has no city, require zip agreement if both sides have one
+                zip_conflict = (
+                    not candidate.norm_city
+                    and candidate.zip_code and hit.zip_code
+                    and candidate.zip_code != hit.zip_code
+                )
+                if not zip_conflict:
+                    return hit, "exact_name", 100.0, "confirmed"
 
     # FIX 4 — Layer 2b: fuzzy name match within the same zip code.
     # Zip is a much tighter geographic constraint than state, so we use a
@@ -193,6 +200,9 @@ def _find_match(
         for rec in zip_bucket:
             if not ck or not rec.norm_name_key:
                 continue
+            if (candidate.house_num and rec.house_num
+                    and candidate.house_num != rec.house_num):
+                continue
             score = fuzz.token_sort_ratio(ck, rec.norm_name_key)
             if score > best_zip_score:
                 best_zip_score = score
@@ -203,6 +213,8 @@ def _find_match(
 
     # Layer 3: fuzzy — city-gated when both sides have a city, else name+address
     best_rec, best_score, best_status, best_layer = None, 0.0, "no_match", "fuzzy_name"
+    # No city and no zip → zero geographic anchor; require confirmed-level confidence for flagged
+    no_geo_anchor = not candidate.norm_city and not candidate.zip_code
     # Fix: cannabis/dispensary stores are never liquor distributor customers — skip fuzzy entirely
     if not _is_cannabis_store(candidate.name):
         for rec in state_bucket:
@@ -232,7 +244,7 @@ def _find_match(
                 layer = "fuzzy_name" if name_score >= addr_score else "fuzzy_address"
             if score >= FUZZY_AUTO:
                 status = "confirmed"
-            elif score >= FUZZY_FLAG:
+            elif score >= (FUZZY_AUTO if no_geo_anchor else FUZZY_FLAG):
                 status = "flagged"
             else:
                 continue
