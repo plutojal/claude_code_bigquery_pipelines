@@ -160,40 +160,78 @@ def _find_match(
                 and fuzz.ratio(candidate.norm_city, hit.norm_city) < 80
             )
             if not city_conflict:
-                return hit, "exact_name", 100.0, "confirmed"
+                # When candidate has no city, require zip agreement if both sides have one
+                zip_conflict = (
+                    not candidate.norm_city
+                    and candidate.zip_code and hit.zip_code
+                    and candidate.zip_code != hit.zip_code
+                )
+                if not zip_conflict:
+                    return hit, "exact_name", 100.0, "confirmed"
 
-    # Layer 3: fuzzy — city-gated when both sides have a city, else name+address
-    best_rec, best_score, best_status, best_layer = None, 0.0, "no_match", "fuzzy_name"
-    for rec in state_bucket:
-        both_have_city = bool(candidate.norm_city and rec.norm_city)
-
-        if both_have_city:
-            if fuzz.ratio(candidate.norm_city, rec.norm_city) < 80:
-                continue  # different city → different store
-            ck, rk = candidate.norm_name_key, rec.norm_name_key
-            name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
-            score = name_score
-            layer = "fuzzy_name_city"
-        else:
-            # No city on one or both sides — hard-skip on house-number conflict
+    # FIX 4 — Layer 2b: fuzzy name match within the same zip code.
+    # Zip is a much tighter geographic constraint than state, so we use a
+    # lower name-score threshold (FUZZY_FLAG) to catch truncated / variant names
+    # like "Ringwood Wine & Liquor" vs "Ringwood Wine & Liquors" or
+    # "Stew Leonard's Paramus - Wine Store" vs "Stew Leonards Paramus - Wine Store".
+    if candidate.zip_code and zip_bucket:
+        best_zip_rec, best_zip_score = None, 0.0
+        ck = candidate.norm_name_key
+        for rec in zip_bucket:
+            if not ck or not rec.norm_name_key:
+                continue
             if (candidate.house_num and rec.house_num
                     and candidate.house_num != rec.house_num):
                 continue
-            addr_score = fuzz.token_sort_ratio(candidate.norm_addr, rec.norm_addr)
-            ck, rk = candidate.norm_name_key, rec.norm_name_key
-            name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
-            score = max(addr_score, name_score)
-            layer = "fuzzy_name" if name_score >= addr_score else "fuzzy_address"
-        if score >= FUZZY_AUTO:
-            status = "confirmed"
-        elif score >= FUZZY_FLAG:
-            status = "flagged"
-        else:
-            continue
-        if score > best_score:
-            best_rec, best_score, best_status, best_layer = rec, score, status, layer
-            if status == "confirmed":
-                break
+            score = fuzz.token_sort_ratio(ck, rec.norm_name_key)
+            if score > best_zip_score:
+                best_zip_score = score
+                best_zip_rec = rec
+        if best_zip_rec and best_zip_score >= FUZZY_FLAG:
+            status = "confirmed" if best_zip_score >= FUZZY_AUTO else "flagged"
+            return best_zip_rec, "fuzzy_name_zip", float(best_zip_score), status
+
+    # Layer 3: fuzzy — city-gated when both sides have a city, else name+address
+    best_rec, best_score, best_status, best_layer = None, 0.0, "no_match", "fuzzy_name"
+    # No city and no zip → zero geographic anchor; require confirmed-level confidence for flagged
+    no_geo_anchor = not candidate.norm_city and not candidate.zip_code
+    # Fix: cannabis/dispensary stores are never liquor distributor customers — skip fuzzy entirely
+    if not _is_cannabis_store(candidate.name):
+        for rec in state_bucket:
+            both_have_city = bool(candidate.norm_city and rec.norm_city)
+
+            if both_have_city:
+                # Fix: raised from 80 → 86 to block near-miss cities (Clinton ≠ Clifton)
+                if fuzz.ratio(candidate.norm_city, rec.norm_city) < 86:
+                    continue  # different city → different store
+                ck, rk = candidate.norm_name_key, rec.norm_name_key
+                # Fix: skip when name key is purely city tokens — no meaningful discriminator
+                # (e.g. "Glen Rock Smoke Shop" and "Ringwood Discount Liquor" both reduce to city)
+                if ck and not (set(ck.split()) - set(candidate.norm_city.split())):
+                    continue
+                name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
+                score = name_score
+                layer = "fuzzy_name_city"
+            else:
+                # No city on one or both sides — hard-skip on house-number conflict
+                if (candidate.house_num and rec.house_num
+                        and candidate.house_num != rec.house_num):
+                    continue
+                addr_score = fuzz.token_sort_ratio(candidate.norm_addr, rec.norm_addr)
+                ck, rk = candidate.norm_name_key, rec.norm_name_key
+                name_score = fuzz.token_sort_ratio(ck, rk) if ck and rk else 0
+                score = max(addr_score, name_score)
+                layer = "fuzzy_name" if name_score >= addr_score else "fuzzy_address"
+            if score >= FUZZY_AUTO:
+                status = "confirmed"
+            elif score >= (FUZZY_AUTO if no_geo_anchor else FUZZY_FLAG):
+                status = "flagged"
+            else:
+                continue
+            if score > best_score:
+                best_rec, best_score, best_status, best_layer = rec, score, status, layer
+                if status == "confirmed":
+                    break
     if best_rec:
         return best_rec, best_layer, best_score, best_status
 
