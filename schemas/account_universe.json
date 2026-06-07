@@ -25,7 +25,9 @@
      {"name": "match_layer",       "type": "STRING",  "mode": "NULLABLE"},
      {"name": "match_confidence",  "type": "FLOAT64", "mode": "NULLABLE"},
      {"name": "match_status",      "type": "STRING",  "mode": "NULLABLE"},
-     {"name": "net_case_volume",   "type": "FLOAT64", "mode": "NULLABLE"}
+     {"name": "case_volume",       "type": "FLOAT64", "mode": "NULLABLE"},
+     {"name": "revenue",           "type": "FLOAT64", "mode": "NULLABLE"},
+     {"name": "revenue_per_case",  "type": "FLOAT64", "mode": "NULLABLE"}
    ]
   },
   {"name": "sarene_flag",    "type": "BOOLEAN",   "mode": "NULLABLE"},

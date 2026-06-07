@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS `product-analytics-389809.retail_stores.account_unive
     match_layer       STRING,
     match_confidence  FLOAT64,
     match_status      STRING,
-    net_case_volume   FLOAT64
+    case_volume       FLOAT64,
+    revenue           FLOAT64,
+    revenue_per_case  FLOAT64
   >>,
   sarene_flag     BOOL,
 

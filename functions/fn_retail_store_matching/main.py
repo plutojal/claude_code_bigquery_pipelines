@@ -83,7 +83,9 @@ class Record:
     city: str
     state: str
     zip_code: str
-    net_case_volume: Optional[float] = field(default=None)
+    case_volume: Optional[float] = field(default=None)
+    revenue: Optional[float] = field(default=None)
+    revenue_per_case: Optional[float] = field(default=None)
     norm_addr: str = field(init=False)
     norm_name: str = field(init=False)
     norm_name_key: str = field(init=False)
@@ -336,7 +338,9 @@ def _load_all_distributor_records(client: bigquery.Client) -> dict[str, list[Rec
             IFNULL(city, '')                AS city,
             IFNULL(state, '')               AS state,
             IFNULL(zip_code, '')            AS zip_code,
-            net_case_volume
+            case_volume,
+            revenue,
+            revenue_per_case
         FROM `{DISTRIBUTOR_TABLE}`
     """
     by_dist: dict[str, list[Record]] = {}
@@ -349,7 +353,9 @@ def _load_all_distributor_records(client: bigquery.Client) -> dict[str, list[Rec
             city=row.city or "",
             state=row.state or "",
             zip_code=row.zip_code or "",
-            net_case_volume=row.net_case_volume,
+            case_volume=row.case_volume,
+            revenue=row.revenue,
+            revenue_per_case=row.revenue_per_case,
         )
         by_dist.setdefault(row.distributor_name, []).append(rec)
     return by_dist
@@ -504,7 +510,9 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
                 "match_layer":       layer if matched else None,
                 "match_confidence":  conf if matched else None,
                 "match_status":      status if matched else None,
-                "net_case_volume":   rec.net_case_volume if rec else None,
+                "case_volume":       rec.case_volume if rec else None,
+                "revenue":           rec.revenue if rec else None,
+                "revenue_per_case":  rec.revenue_per_case if rec else None,
             })
 
         chunk.append({
