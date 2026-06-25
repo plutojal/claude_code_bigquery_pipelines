@@ -338,7 +338,7 @@ def _load_all_distributor_records(client: bigquery.Client) -> dict[str, list[Rec
             IFNULL(city, '')                AS city,
             IFNULL(state, '')               AS state,
             IFNULL(zip_code, '')            AS zip_code,
-            CAST(case_volume AS FLOAT64)     AS case_volume,
+            CAST(net_case_volume AS FLOAT64)  AS case_volume,
             CAST(revenue AS FLOAT64)         AS revenue,
             CAST(revenue_per_case AS FLOAT64) AS revenue_per_case
         FROM `{DISTRIBUTOR_TABLE}`
