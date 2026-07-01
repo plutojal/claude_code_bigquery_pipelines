@@ -42,6 +42,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
   --allow-unauthenticated \
   --memory=512Mi \
   --timeout=540s \
+  --clear-secrets \
   ${ENV_FLAG[@]+"${ENV_FLAG[@]}"}
 
 FUNCTION_URI=$(gcloud functions describe "${FUNCTION_NAME}" \
