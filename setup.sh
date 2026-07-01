@@ -44,6 +44,13 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.zip_lookup" \
   "schemas/zip_lookup.json" || echo "Table already exists, skipping."
 
+echo "Creating BigQuery table ${DATASET}.store_geocodes..."
+bq --project_id="${PROJECT}" mk \
+  --table \
+  --description="Google Maps geocode lookup for stores missing lat/lng" \
+  "${PROJECT}:${DATASET}.store_geocodes" \
+  "schemas/store_geocodes.json" || echo "Table already exists, skipping."
+
 # Add any columns introduced after initial table creation (idempotent via IF NOT EXISTS).
 echo "Applying schema migrations..."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."
