@@ -2,6 +2,7 @@
   {"name": "store_id",          "type": "STRING",    "mode": "REQUIRED"},
   {"name": "lat",               "type": "FLOAT64",   "mode": "NULLABLE"},
   {"name": "lng",               "type": "FLOAT64",   "mode": "NULLABLE"},
+  {"name": "zip",               "type": "STRING",    "mode": "NULLABLE"},
   {"name": "formatted_address", "type": "STRING",    "mode": "NULLABLE"},
   {"name": "location_type",     "type": "STRING",    "mode": "NULLABLE"},
   {"name": "geocoded_at",       "type": "TIMESTAMP", "mode": "NULLABLE"}

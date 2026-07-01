@@ -2,7 +2,11 @@
 
 Pulls stores from mart_stores where latitude IS NULL, geocodes their
 address, and MERGEs results into the store_geocodes lookup table.
-mart_store_locator joins against store_geocodes to coalesce the blanks.
+The zip code from the geocode result is captured too — missing zips are
+the main reason coordinates are blank (mart_stores falls back to
+zip_lookup centroids), so filling zip also unlocks pop density, area
+type, and county. mart_store_locator joins against store_geocodes to
+coalesce the blanks.
 
 Reruns are cheap: stores already present in store_geocodes are skipped,
 so the API is only called for addresses that have never been resolved.
@@ -36,8 +40,16 @@ MAX_RETRIES = 3          # per address, on OVER_QUERY_LIMIT / transient errors
 # Google Maps Geocoding API
 # ---------------------------------------------------------------------------
 
+def _extract_zip(result: dict) -> str | None:
+    """Pulls the 5-digit postal_code from the geocode result's address components."""
+    for component in result.get("address_components", []):
+        if "postal_code" in component.get("types", []):
+            return component.get("short_name", "")[:5] or None
+    return None
+
+
 def _geocode_address(address: str, api_key: str) -> dict | None:
-    """Returns {lat, lng, formatted_address, location_type} or None if unresolvable."""
+    """Returns {lat, lng, zip, formatted_address, location_type} or None if unresolvable."""
     params = {
         "address": address,
         "components": "country:US",
@@ -60,6 +72,7 @@ def _geocode_address(address: str, api_key: str) -> dict | None:
             return {
                 "lat": location["lat"],
                 "lng": location["lng"],
+                "zip": _extract_zip(result),
                 "formatted_address": result.get("formatted_address"),
                 "location_type": result["geometry"].get("location_type"),
             }
@@ -80,9 +93,17 @@ def _geocode_address(address: str, api_key: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _fetch_stores(client: bigquery.Client) -> list:
-    """Stores missing coordinates that have not already been geocoded."""
+    """Stores missing coordinates that have not already been geocoded.
+
+    geocode_query concatenates address, city, state, and zip (whatever is
+    present) so Google gets full context even when the raw address field
+    is street-only.
+    """
     sql = f"""
-        SELECT s.store_id, s.address
+        SELECT
+            s.store_id,
+            ARRAY_TO_STRING([s.address, s.parsed_city, s.state, s.zip], ', ')
+                AS geocode_query
         FROM `{PROJECT}.{DATASET}.{SOURCE_TABLE}` AS s
         LEFT JOIN `{PROJECT}.{DATASET}.{GEOCODE_TABLE}` AS g
           ON g.store_id = s.store_id
@@ -103,6 +124,7 @@ def _apply_updates(client: bigquery.Client, rows: list[dict]) -> None:
         bigquery.SchemaField("store_id",          "STRING"),
         bigquery.SchemaField("lat",               "FLOAT64"),
         bigquery.SchemaField("lng",               "FLOAT64"),
+        bigquery.SchemaField("zip",               "STRING"),
         bigquery.SchemaField("formatted_address", "STRING"),
         bigquery.SchemaField("location_type",     "STRING"),
         bigquery.SchemaField("geocoded_at",       "TIMESTAMP"),
@@ -120,6 +142,7 @@ def _apply_updates(client: bigquery.Client, rows: list[dict]) -> None:
         WHEN MATCHED THEN UPDATE SET
             t.lat = s.lat,
             t.lng = s.lng,
+            t.zip = s.zip,
             t.formatted_address = s.formatted_address,
             t.location_type = s.location_type,
             t.geocoded_at = s.geocoded_at
@@ -153,12 +176,12 @@ def main() -> None:
     resolved: list[dict] = []
     failed = 0
     for i, store in enumerate(stores, start=1):
-        hit = _geocode_address(store.address, api_key)
+        hit = _geocode_address(store.geocode_query, api_key)
         if hit:
             resolved.append({"store_id": store.store_id, "geocoded_at": now, **hit})
         else:
             failed += 1
-            print(f"  [{i}/{total}] no result: {store.store_id} — {store.address}")
+            print(f"  [{i}/{total}] no result: {store.store_id} — {store.geocode_query}")
         if i % 25 == 0 or i == total:
             print(f"[{i}/{total}] geocoded, {len(resolved)} resolved, {failed} failed.")
         time.sleep(SLEEP_SECS)
