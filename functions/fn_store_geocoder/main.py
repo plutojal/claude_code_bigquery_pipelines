@@ -90,12 +90,12 @@ def _geocode_address(address: str, api_key: str) -> dict | None:
 # BigQuery helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_stores(client: bigquery.Client) -> list:
+def _fetch_stores(client: bigquery.Client, limit: int | None = None) -> list:
     """Stores missing coordinates that have not already been geocoded.
 
     geocode_query concatenates address, city, state, and zip (whatever is
     present) so Google gets full context even when the raw address field
-    is street-only.
+    is street-only.  limit caps the number of stores for test runs.
     """
     sql = f"""
         SELECT
@@ -110,6 +110,8 @@ def _fetch_stores(client: bigquery.Client) -> list:
           AND g.store_id IS NULL
         ORDER BY s.store_id
     """
+    if limit:
+        sql += f"        LIMIT {int(limit)}\n"
     return list(client.query(sql).result())
 
 
@@ -155,9 +157,11 @@ def _apply_updates(client: bigquery.Client, rows: list[dict]) -> None:
 # Main geocoding run
 # ---------------------------------------------------------------------------
 
-def _run_geocoding(client: bigquery.Client, api_key: str) -> str:
-    stores = _fetch_stores(client)
+def _run_geocoding(client: bigquery.Client, api_key: str, limit: int | None = None) -> str:
+    stores = _fetch_stores(client, limit)
     total = len(stores)
+    if limit:
+        print(f"Test mode: limited to {limit} store(s).")
     if total == 0:
         print("All stores already have coordinates or geocode entries.")
         return "0 geocoded, 0 unresolved"
@@ -193,6 +197,16 @@ def fn_store_geocoder(request):
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not api_key:
         return "GOOGLE_MAPS_API_KEY is not configured on this function.", 500
+
+    # Optional ?limit=N for test runs — caps how many stores get geocoded.
+    limit = None
+    raw_limit = request.args.get("limit")
+    if raw_limit:
+        try:
+            limit = max(1, int(raw_limit))
+        except ValueError:
+            return f"Invalid limit '{raw_limit}'. Use a positive integer.", 400
+
     client = bigquery.Client(project=PROJECT)
-    summary = _run_geocoding(client, api_key)
+    summary = _run_geocoding(client, api_key, limit)
     return f"OK ({summary})", 200
