@@ -13,10 +13,12 @@ SECRET_NAME="maps-api-key"
 #   2. Store it in Secret Manager:
 #        echo -n "YOUR_KEY" | gcloud secrets create ${SECRET_NAME} \
 #          --project=${PROJECT} --data-file=-
-#   3. Grant the function's service account access:
+#   3. Grant the function's runtime service account access (gen2 functions
+#      run as the default compute SA — PROJECT_NUMBER-compute@):
+#        PROJECT_NUMBER=$(gcloud projects describe ${PROJECT} --format="value(projectNumber)")
 #        gcloud secrets add-iam-policy-binding ${SECRET_NAME} \
 #          --project=${PROJECT} \
-#          --member="serviceAccount:${PROJECT}@appspot.gserviceaccount.com" \
+#          --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
 #          --role="roles/secretmanager.secretAccessor"
 
 echo "Deploying ${FUNCTION_NAME}..."
