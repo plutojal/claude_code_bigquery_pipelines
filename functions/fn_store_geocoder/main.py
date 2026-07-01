@@ -5,24 +5,22 @@ address, and MERGEs results into the store_geocodes lookup table.
 The zip code from the geocode result is captured too — missing zips are
 the main reason coordinates are blank (mart_stores falls back to
 zip_lookup centroids), so filling zip also unlocks pop density, area
-type, and county. mart_store_locator joins against store_geocodes to
-coalesce the blanks.
+type, and county. mart_stores joins against store_geocodes to coalesce
+the blanks.
 
-Reruns are cheap: stores already present in store_geocodes are skipped,
+Runs are cheap: stores already present in store_geocodes are skipped,
 so the API is only called for addresses that have never been resolved.
 
 Requires:
-    GOOGLE_MAPS_API_KEY env var (Geocoding API enabled on the key)
-
-Usage:
-    python geocode_missing_coords.py
+    GOOGLE_MAPS_API_KEY env var — injected from Secret Manager at deploy
+    time (see deploy_fn_store_geocoder.sh).
 """
 
 import os
-import sys
 import time
 from datetime import datetime, timezone
 
+import functions_framework
 import requests
 from google.cloud import bigquery
 
@@ -154,22 +152,15 @@ def _apply_updates(client: bigquery.Client, rows: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Main geocoding run
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
-    if not api_key:
-        print("Error: GOOGLE_MAPS_API_KEY env var is not set.")
-        sys.exit(1)
-
-    client = bigquery.Client(project=PROJECT)
-
+def _run_geocoding(client: bigquery.Client, api_key: str) -> str:
     stores = _fetch_stores(client)
     total = len(stores)
     if total == 0:
         print("All stores already have coordinates or geocode entries.")
-        return
+        return "0 geocoded, 0 unresolved"
     print(f"{total} stores need geocoding.")
 
     now = datetime.now(timezone.utc).isoformat()
@@ -186,10 +177,22 @@ def main() -> None:
             print(f"[{i}/{total}] geocoded, {len(resolved)} resolved, {failed} failed.")
         time.sleep(SLEEP_SECS)
 
-    print(f"\nApplying {len(resolved)}/{total} updates ...")
+    print(f"Applying {len(resolved)}/{total} updates ...")
     _apply_updates(client, resolved)
-    print(f"Done — {len(resolved)} geocoded, {failed} unresolved.")
+    summary = f"{len(resolved)} geocoded, {failed} unresolved"
+    print(f"Done — {summary}")
+    return summary
 
 
-if __name__ == "__main__":
-    main()
+# ---------------------------------------------------------------------------
+# Entry point — HTTP trigger (called by Cloud Scheduler)
+# ---------------------------------------------------------------------------
+
+@functions_framework.http
+def fn_store_geocoder(request):
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        return "GOOGLE_MAPS_API_KEY is not configured on this function.", 500
+    client = bigquery.Client(project=PROJECT)
+    summary = _run_geocoding(client, api_key)
+    return f"OK ({summary})", 200
