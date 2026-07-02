@@ -1,7 +1,9 @@
 """Geocode stores missing lat/lng via the Google Maps Geocoding API.
 
 Pulls stores from mart_stores where latitude IS NULL, geocodes their
-address, and MERGEs results into the store_geocodes lookup table.
+address, and streams each result into the store_geocodes lookup table
+row by row — an interrupted run keeps everything geocoded so far and
+resumes at the first unwritten store.
 The zip code from the geocode result is captured too — missing zips are
 the main reason coordinates are blank (mart_stores falls back to
 zip_lookup centroids), so filling zip also unlocks pop density, area
@@ -115,42 +117,18 @@ def _fetch_stores(client: bigquery.Client, limit: int | None = None) -> list:
     return list(client.query(sql).result())
 
 
-def _apply_updates(client: bigquery.Client, rows: list[dict]) -> None:
-    if not rows:
-        return
+def _insert_row(client: bigquery.Client, row: dict) -> bool:
+    """Streams a single geocode result into store_geocodes immediately.
 
-    staging = f"{PROJECT}.{DATASET}._store_geocodes_staging"
-    schema = [
-        bigquery.SchemaField("store_id",          "STRING"),
-        bigquery.SchemaField("lat",               "FLOAT64"),
-        bigquery.SchemaField("lng",               "FLOAT64"),
-        bigquery.SchemaField("zip",               "STRING"),
-        bigquery.SchemaField("formatted_address", "STRING"),
-        bigquery.SchemaField("location_type",     "STRING"),
-        bigquery.SchemaField("geocoded_at",       "TIMESTAMP"),
-    ]
-    job_config = bigquery.LoadJobConfig(
-        schema=schema,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-    )
-    client.load_table_from_json(rows, staging, job_config=job_config).result()
-
-    sql = f"""
-        MERGE `{PROJECT}.{DATASET}.{GEOCODE_TABLE}` AS t
-        USING `{staging}` AS s
-        ON t.store_id = s.store_id
-        WHEN MATCHED THEN UPDATE SET
-            t.lat = s.lat,
-            t.lng = s.lng,
-            t.zip = s.zip,
-            t.formatted_address = s.formatted_address,
-            t.location_type = s.location_type,
-            t.geocoded_at = s.geocoded_at
-        WHEN NOT MATCHED BY TARGET THEN INSERT ROW
+    Per-row writes mean a crashed or timed-out run loses nothing — every
+    geocode already paid for is in the table, and the next run resumes
+    at the first unwritten store (the fetch query skips existing rows).
     """
-    client.query(sql).result()
-    client.delete_table(staging)
-    print(f"  Wrote {len(rows)} rows to {GEOCODE_TABLE}.")
+    errors = client.insert_rows_json(f"{PROJECT}.{DATASET}.{GEOCODE_TABLE}", [row])
+    if errors:
+        print(f"  insert failed for {row['store_id']}: {errors}")
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -185,24 +163,25 @@ def _run_geocoding(client: bigquery.Client, api_key: str, limit: int | None = No
         print(f"{pending} stores need geocoding.")
 
     now = datetime.now(timezone.utc).isoformat()
-    resolved: list[dict] = []
+    written = 0
     failed = 0
     for i, store in enumerate(stores, start=1):
         hit = _geocode_address(store.geocode_query, api_key)
-        if hit:
-            resolved.append({"store_id": store.store_id, "geocoded_at": now, **hit})
+        if hit and _insert_row(client, {"store_id": store.store_id, "geocoded_at": now, **hit}):
+            written += 1
+            print(
+                f"[{i}/{total}] {store.store_id} → "
+                f"({hit['lat']:.5f}, {hit['lng']:.5f}) zip={hit['zip']} {hit['location_type']}"
+            )
         else:
             failed += 1
-            print(f"  [{i}/{total}] no result: {store.store_id} — {store.geocode_query}")
-        if i % 25 == 0 or i == total:
-            print(f"[{i}/{total}] geocoded, {len(resolved)} resolved, {failed} failed.")
+            if not hit:
+                print(f"[{i}/{total}] {store.store_id} → no result: {store.geocode_query}")
         time.sleep(SLEEP_SECS)
 
-    print(f"Applying {len(resolved)}/{total} updates ...")
-    _apply_updates(client, resolved)
-    remaining = pending - len(resolved)
+    remaining = pending - written
     summary = (
-        f"{pending} pending, {total} processed, {len(resolved)} geocoded, "
+        f"{pending} pending, {total} processed, {written} geocoded, "
         f"{failed} unresolved, {remaining} remaining"
     )
     print(f"Done — {summary}")
