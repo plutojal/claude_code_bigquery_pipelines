@@ -41,7 +41,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
   --trigger-http \
   --allow-unauthenticated \
   --memory=512Mi \
-  --timeout=540s \
+  --timeout=1800s \
   --clear-secrets \
   ${ENV_FLAG[@]+"${ENV_FLAG[@]}"}
 
