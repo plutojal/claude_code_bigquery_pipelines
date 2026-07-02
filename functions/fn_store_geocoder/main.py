@@ -157,15 +157,32 @@ def _apply_updates(client: bigquery.Client, rows: list[dict]) -> None:
 # Main geocoding run
 # ---------------------------------------------------------------------------
 
+def _count_pending(client: bigquery.Client) -> int:
+    """Total stores still missing coordinates and not yet geocoded."""
+    sql = f"""
+        SELECT COUNT(*) AS cnt
+        FROM `{PROJECT}.{DATASET}.{SOURCE_TABLE}` AS s
+        LEFT JOIN `{PROJECT}.{DATASET}.{GEOCODE_TABLE}` AS g
+          ON g.store_id = s.store_id
+        WHERE s.latitude IS NULL
+          AND s.address IS NOT NULL
+          AND g.store_id IS NULL
+    """
+    return next(client.query(sql).result()).cnt
+
+
 def _run_geocoding(client: bigquery.Client, api_key: str, limit: int | None = None) -> str:
+    pending = _count_pending(client)
+    if pending == 0:
+        print("All stores already have coordinates or geocode entries.")
+        return "0 pending, 0 processed, 0 geocoded, 0 unresolved, 0 remaining"
+
     stores = _fetch_stores(client, limit)
     total = len(stores)
     if limit:
-        print(f"Test mode: limited to {limit} store(s).")
-    if total == 0:
-        print("All stores already have coordinates or geocode entries.")
-        return "0 geocoded, 0 unresolved"
-    print(f"{total} stores need geocoding.")
+        print(f"Test mode: processing {total} of {pending} pending store(s).")
+    else:
+        print(f"{pending} stores need geocoding.")
 
     now = datetime.now(timezone.utc).isoformat()
     resolved: list[dict] = []
@@ -183,7 +200,11 @@ def _run_geocoding(client: bigquery.Client, api_key: str, limit: int | None = No
 
     print(f"Applying {len(resolved)}/{total} updates ...")
     _apply_updates(client, resolved)
-    summary = f"{len(resolved)} geocoded, {failed} unresolved"
+    remaining = pending - len(resolved)
+    summary = (
+        f"{pending} pending, {total} processed, {len(resolved)} geocoded, "
+        f"{failed} unresolved, {remaining} remaining"
+    )
     print(f"Done — {summary}")
     return summary
 
