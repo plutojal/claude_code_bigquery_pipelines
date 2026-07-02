@@ -39,7 +39,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
   --source="${SOURCE_DIR}" \
   --entry-point=fn_store_geocoder \
   --trigger-http \
-  --allow-unauthenticated \
+  --no-allow-unauthenticated \
   --memory=512Mi \
   --timeout=1800s \
   --clear-secrets \
