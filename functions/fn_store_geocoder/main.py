@@ -48,8 +48,14 @@ def _extract_zip(result: dict) -> str | None:
     return None
 
 
-def _geocode_address(address: str, api_key: str) -> dict | None:
-    """Returns {lat, lng, zip, formatted_address, location_type} or None if unresolvable."""
+def _geocode_address(address: str, api_key: str) -> tuple[dict | None, str]:
+    """Geocodes one address. Returns (result, status).
+
+    result is {lat, lng, zip, formatted_address, location_type} on success,
+    else None.  status distinguishes permanent failures (ZERO_RESULTS,
+    INVALID_REQUEST — the address itself is bad, never retry) from
+    transient ones (TRANSIENT — leave pending so the next run retries).
+    """
     params = {
         "address": address,
         "components": "country:US",
@@ -75,17 +81,18 @@ def _geocode_address(address: str, api_key: str) -> dict | None:
                 "zip": _extract_zip(result),
                 "formatted_address": result.get("formatted_address"),
                 "location_type": result["geometry"].get("location_type"),
-            }
-        if status == "ZERO_RESULTS":
-            return None
+            }, "OK"
+        if status in ("ZERO_RESULTS", "INVALID_REQUEST"):
+            # Permanent: the address itself can't be resolved
+            return None, status
         if status == "OVER_QUERY_LIMIT":
             print("  Rate limited; backing off...")
             time.sleep(2 ** (attempt + 1))
             continue
-        # REQUEST_DENIED / INVALID_REQUEST / UNKNOWN_ERROR
+        # REQUEST_DENIED / UNKNOWN_ERROR — config or server side, retry next run
         print(f"  Geocode failed for '{address}': {status} — {body.get('error_message', '')}")
-        return None
-    return None
+        return None, "TRANSIENT"
+    return None, "TRANSIENT"
 
 
 # ---------------------------------------------------------------------------
@@ -164,25 +171,33 @@ def _run_geocoding(client: bigquery.Client, api_key: str, limit: int | None = No
 
     now = datetime.now(timezone.utc).isoformat()
     written = 0
-    failed = 0
+    dead = 0
+    transient = 0
     for i, store in enumerate(stores, start=1):
-        hit = _geocode_address(store.geocode_query, api_key)
-        if hit and _insert_row(client, {"store_id": store.store_id, "geocoded_at": now, **hit}):
+        hit, status = _geocode_address(store.geocode_query, api_key)
+        if hit and _insert_row(client, {"store_id": store.store_id, "geocode_status": status,
+                                        "geocoded_at": now, **hit}):
             written += 1
             print(
                 f"[{i}/{total}] {store.store_id} → "
                 f"({hit['lat']:.5f}, {hit['lng']:.5f}) zip={hit['zip']} {hit['location_type']}"
             )
+        elif status in ("ZERO_RESULTS", "INVALID_REQUEST"):
+            # Negative cache: record the permanent failure so daily runs
+            # stop retrying an address Google will never resolve.
+            _insert_row(client, {"store_id": store.store_id, "geocode_status": status,
+                                 "geocoded_at": now})
+            dead += 1
+            print(f"[{i}/{total}] {store.store_id} → {status} (won't retry): {store.geocode_query}")
         else:
-            failed += 1
-            if not hit:
-                print(f"[{i}/{total}] {store.store_id} → no result: {store.geocode_query}")
+            transient += 1
+            print(f"[{i}/{total}] {store.store_id} → transient failure, will retry next run")
         time.sleep(SLEEP_SECS)
 
-    remaining = pending - written
+    remaining = pending - written - dead
     summary = (
         f"{pending} pending, {total} processed, {written} geocoded, "
-        f"{failed} unresolved, {remaining} remaining"
+        f"{dead} unresolvable (cached), {transient} transient, {remaining} remaining"
     )
     print(f"Done — {summary}")
     return summary
