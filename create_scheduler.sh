@@ -17,6 +17,13 @@ FUNCTION_URI=$(gcloud functions describe "${FUNCTION_NAME}" \
 
 SERVICE_ACCOUNT="${PROJECT}@appspot.gserviceaccount.com"
 
+# The geocoder function is authenticated-only (no allUsers binding), and we
+# can't grant run.invoker under current project permissions. The default
+# compute SA can invoke it via its project-level basic role, so the geocoder
+# job authenticates as that SA instead of the appspot one.
+PROJECT_NUMBER=$(gcloud projects describe "${PROJECT}" --format="value(projectNumber)")
+GEOCODER_SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
 echo "Creating/updating daily incremental job: ${DAILY_JOB}..."
 gcloud scheduler jobs create http "${DAILY_JOB}" \
   --project="${PROJECT}" \
@@ -71,7 +78,7 @@ gcloud scheduler jobs create http "${GEOCODER_JOB}" \
   --location="${REGION}" \
   --schedule="0 14 * * *" \
   --uri="${GEOCODER_URI}" \
-  --oidc-service-account-email="${SERVICE_ACCOUNT}" \
+  --oidc-service-account-email="${GEOCODER_SERVICE_ACCOUNT}" \
   --oidc-token-audience="${GEOCODER_URI}" \
   --http-method=POST \
   --description="Daily — geocodes mart_stores rows missing lat/lng via Google Maps (14:00 UTC)" \
@@ -81,7 +88,7 @@ gcloud scheduler jobs create http "${GEOCODER_JOB}" \
     --location="${REGION}" \
     --schedule="0 14 * * *" \
     --uri="${GEOCODER_URI}" \
-    --oidc-service-account-email="${SERVICE_ACCOUNT}" \
+    --oidc-service-account-email="${GEOCODER_SERVICE_ACCOUNT}" \
     --oidc-token-audience="${GEOCODER_URI}" \
     --http-method=POST
 
