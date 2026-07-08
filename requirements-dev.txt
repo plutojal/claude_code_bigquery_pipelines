@@ -1,0 +1,7 @@
+# Dependencies for running the pytest suite (tests/).
+# Superset of every function's runtime deps so their main.py modules import.
+pytest>=8.0
+rapidfuzz>=3.0.0
+google-cloud-bigquery>=3.0.0
+functions-framework>=3.0.0
+requests>=2.28.0
