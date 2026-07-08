@@ -5,9 +5,11 @@ ingestion, distributor matching, and location enrichment. Dataform handles
 the downstream models (`int_*`, `mart_*`); this repo owns the raw tables,
 Cloud Functions, and deploy scripts.
 
-> **New to the pipeline?** See [`docs/RUNBOOK.md`](docs/RUNBOOK.md) for the
-> day-to-day commands: invoking functions, deploying, firing schedulers,
-> reading logs, and fixing common errors.
+> **New to the pipeline?** Start with [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+> — it walks the whole flow (from a file landing in the bucket to the dashboard
+> tables) and explains every file and folder. Then use
+> [`docs/RUNBOOK.md`](docs/RUNBOOK.md) for the day-to-day commands: invoking
+> functions, deploying, firing schedulers, reading logs, and fixing common errors.
 
 ## Components
 
