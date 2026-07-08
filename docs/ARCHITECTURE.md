@@ -170,6 +170,8 @@ Each subfolder is one deployable Cloud Function (its own `main.py` +
 | `functions/fn_retail_store_matching/requirements.txt` | Deps (adds `rapidfuzz` for fuzzy matching). |
 | `functions/fn_store_geocoder/main.py` | **Stage 5.** The geocoder. Calls Google Maps, streams results row-by-row into `store_geocodes`, negative-caches failures. |
 | `functions/fn_store_geocoder/requirements.txt` | Deps (adds `requests`). |
+| `functions/fn_pipeline_monitor/main.py` | **Monitoring.** Scheduled freshness backstop. Reads `pipeline_runs` heartbeats; logs stale/missing runs to `pipeline_errors`. |
+| `functions/*/error_log.py` | Shared logging helper (`log_error`, `log_run`). **Identical copy in every function folder** — change one, change all. |
 
 ### Table schemas — `schemas/`
 
@@ -192,7 +194,8 @@ create/update tables).
 | `deploy_fn_retail_store_scrape_processor.sh` | Deploys the scrape processor (wired to the bucket's file-finalized trigger). |
 | `deploy_fn_retail_store_matching.sh` | Deploys the matching function (HTTP trigger). |
 | `deploy_fn_store_geocoder.sh` | Deploys the geocoder. Prompts (hidden) for the Maps API key and sets it as an env var. |
-| `create_scheduler.sh` | Creates/updates all three Cloud Scheduler jobs. Idempotent — safe to re-run. |
+| `deploy_fn_pipeline_monitor.sh` | Deploys the monitor function. |
+| `create_scheduler.sh` | Creates/updates all four Cloud Scheduler jobs (matching daily/weekly, geocoder, monitor). Idempotent — safe to re-run. |
 
 ### One-off / helper scripts (repo root)
 
@@ -237,6 +240,8 @@ All in dataset `product-analytics-389809.retail_stores`.
 | `account_universe` | this repo (matching fn) | Stores + `distributor_matches` + flags. |
 | `store_geocodes` | this repo (geocoder fn) | Geocoded lat/lng/zip lookup. |
 | `zip_lookup` | this repo (`load_zip_lookup.py`) | US zip reference data. |
+| `pipeline_errors` | this repo (functions via `log_error`) | Failed-check log; polled by the external Slack notifier. |
+| `pipeline_runs` | this repo (functions via `log_run`) | Run heartbeats; read by `fn-pipeline-monitor` for freshness. |
 | `mart_stores` / `mart_store_locator` | Dataform | Final dashboard models. |
 
 ---
@@ -256,6 +261,19 @@ Monitoring is split in two on purpose:
   `pipeline_errors` for `notified = FALSE`, posts each to the #data-pipelines
   channel, and sets `notified = TRUE`. Keeping it external means **no Slack
   webhook or secret lives in this repo.**
+
+Two kinds of failure are covered:
+
+- **A function that runs but hits a problem** reports itself: each entrypoint is
+  wrapped so an unhandled exception logs `unhandled_exception` before re-raising,
+  and functions run data checks (e.g. matching logs `zero_stores_matched`).
+- **A function that never runs at all** (scheduler silently not firing) can't
+  report itself. So every successful run writes a heartbeat to `pipeline_runs`
+  via `log_run(...)`, and **`fn-pipeline-monitor`** (daily, 15:00 UTC) checks the
+  newest heartbeat per component — if it's missing or older than 26h, it logs
+  `stale_run` / `no_successful_run` to `pipeline_errors`. This is why the
+  heartbeat is written even on a no-op incremental run: it distinguishes
+  "nothing to do" from "never fired."
 
 The contract between the two is just the table. The Slack notifier does roughly:
 
@@ -322,7 +340,13 @@ Things that will bite you if you don't know them:
   harmless gcloud display bug** (note the mangled email). It does not mean your
   command failed — read the final result line.
 
-- **What still needs doing** (scoped but not built): Slack alerting on function
-  / scheduler failures, unit tests for the matching logic, and broader Dataform
-  assertions. These are the biggest risks to an unattended pipeline — a silent
-  failure currently surfaces only when a dashboard looks wrong.
+- **Monitoring is in place but depends on the external Slack function.** This
+  repo logs failures to `pipeline_errors` and run heartbeats to `pipeline_runs`,
+  and `fn-pipeline-monitor` flags stale runs — but nothing reaches Slack until
+  the separate notifier function (polls `pipeline_errors WHERE notified = FALSE`)
+  is built and scheduled. Until then, watch the table directly:
+  `SELECT * FROM retail_stores.pipeline_errors WHERE notified = FALSE`.
+
+- **What still needs doing** (scoped but not built): the external Slack notifier
+  function; broader Dataform assertions on the `int_*` / `mart_*` models. The
+  pytest suite (`tests/`) covers the function logic and runs in CI on every push.

@@ -26,6 +26,8 @@ import functions_framework
 import requests
 from google.cloud import bigquery
 
+from error_log import log_error, log_run
+
 PROJECT = "product-analytics-389809"
 DATASET = "retail_stores"
 SOURCE_TABLE = "mart_stores"
@@ -223,5 +225,13 @@ def fn_store_geocoder(request):
             return f"Invalid limit '{raw_limit}'. Use a positive integer.", 400
 
     client = bigquery.Client(project=PROJECT)
-    summary = _run_geocoding(client, api_key, limit)
+    try:
+        summary = _run_geocoding(client, api_key, limit)
+    except Exception as exc:  # noqa: BLE001 — record infra failure, then re-raise
+        log_error(
+            "fn-store-geocoder", "unhandled_exception", str(exc),
+            severity="ERROR", test_type="infrastructure", client=client,
+        )
+        raise
+    log_run("fn-store-geocoder", "success", client=client)
     return f"OK ({summary})", 200

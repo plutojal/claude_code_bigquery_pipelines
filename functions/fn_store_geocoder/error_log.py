@@ -19,6 +19,7 @@ from google.cloud import bigquery
 PROJECT = "product-analytics-389809"
 DATASET = "retail_stores"
 ERROR_TABLE = "pipeline_errors"
+RUNS_TABLE = "pipeline_runs"
 
 
 def log_error(
@@ -69,4 +70,40 @@ def log_error(
         return True
     except Exception as exc:  # noqa: BLE001 — logging must never break the caller
         print(f"pipeline_errors insert raised: {exc}")
+        return False
+
+
+def log_run(
+    component: str,
+    status: str = "success",
+    *,
+    mode: str | None = None,
+    rows: int | None = None,
+    run_id: str | None = None,
+    client: "bigquery.Client | None" = None,
+) -> bool:
+    """Append a run heartbeat to pipeline_runs — proof the function actually ran.
+
+    The pipeline monitor checks the newest heartbeat per component to catch a
+    scheduler that silently never fires (the function never runs, so it can't
+    report its own absence). Call once per successful run, even a no-op run.
+    Never raises.
+    """
+    client = client or bigquery.Client(project=PROJECT)
+    row = {
+        "run_id": run_id or uuid.uuid4().hex,
+        "component": component,
+        "mode": mode,
+        "status": status,
+        "rows_processed": rows,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        errors = client.insert_rows_json(f"{PROJECT}.{DATASET}.{RUNS_TABLE}", [row])
+        if errors:
+            print(f"pipeline_runs insert failed: {errors}")
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001 — heartbeat must never break the caller
+        print(f"pipeline_runs insert raised: {exc}")
         return False

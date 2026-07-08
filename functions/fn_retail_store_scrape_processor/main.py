@@ -10,6 +10,7 @@ from cloudevents.http import CloudEvent
 from google.cloud import bigquery, storage
 
 from _lib import load_csv
+from error_log import log_error
 
 PROJECT = "product-analytics-389809"
 DATASET = "retail_stores"
@@ -95,4 +96,12 @@ def fn_retail_store_scrape_processor(cloud_event: CloudEvent) -> None:
         return
 
     print(f"Processing gs://{bucket_name}/{file_name}")
-    process_file(bucket_name, file_name)
+    try:
+        process_file(bucket_name, file_name)
+    except Exception as exc:  # noqa: BLE001 — record infra failure, then re-raise
+        log_error(
+            "fn-retail-store-scrape-processor", "unhandled_exception", str(exc),
+            severity="ERROR", test_type="infrastructure",
+            context={"file": file_name},
+        )
+        raise

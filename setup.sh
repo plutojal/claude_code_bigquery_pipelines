@@ -60,6 +60,15 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.pipeline_errors" \
   "schemas/pipeline_errors.json" || echo "Table already exists, skipping."
 
+echo "Creating BigQuery table ${DATASET}.pipeline_runs..."
+bq --project_id="${PROJECT}" mk \
+  --table \
+  --time_partitioning_type=DAY \
+  --time_partitioning_field=finished_at \
+  --description="Run heartbeats per function; read by fn-pipeline-monitor for freshness" \
+  "${PROJECT}:${DATASET}.pipeline_runs" \
+  "schemas/pipeline_runs.json" || echo "Table already exists, skipping."
+
 # Add any columns introduced after initial table creation (idempotent via IF NOT EXISTS).
 echo "Applying schema migrations..."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."

@@ -1,0 +1,8 @@
+[
+  {"name": "run_id",         "type": "STRING",    "mode": "REQUIRED", "description": "Unique id for this run"},
+  {"name": "component",      "type": "STRING",    "mode": "REQUIRED", "description": "Which function ran, e.g. fn-retail-store-matching"},
+  {"name": "mode",           "type": "STRING",    "mode": "NULLABLE", "description": "Run variant, e.g. incremental / full"},
+  {"name": "status",         "type": "STRING",    "mode": "REQUIRED", "description": "success or failure"},
+  {"name": "rows_processed", "type": "INTEGER",   "mode": "NULLABLE", "description": "Rows the run processed, if applicable"},
+  {"name": "finished_at",    "type": "TIMESTAMP", "mode": "REQUIRED", "description": "When the run completed"}
+]

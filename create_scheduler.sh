@@ -8,6 +8,8 @@ DAILY_JOB="retail-store-matching-daily"
 WEEKLY_JOB="retail-store-matching-weekly"
 GEOCODER_FUNCTION="fn-store-geocoder"
 GEOCODER_JOB="store-geocoder-daily"
+MONITOR_FUNCTION="fn-pipeline-monitor"
+MONITOR_JOB="pipeline-monitor-daily"
 
 FUNCTION_URI=$(gcloud functions describe "${FUNCTION_NAME}" \
   --project="${PROJECT}" \
@@ -92,13 +94,43 @@ gcloud scheduler jobs create http "${GEOCODER_JOB}" \
     --oidc-token-audience="${GEOCODER_URI}" \
     --http-method=POST
 
+# Monitor runs at 15:00 UTC — after matching (12:00) and geocoder (14:00), so a
+# missed run shows up as a stale heartbeat. Uses the compute SA like the geocoder.
+MONITOR_URI=$(gcloud functions describe "${MONITOR_FUNCTION}" \
+  --project="${PROJECT}" \
+  --region="${REGION}" \
+  --gen2 \
+  --format="value(serviceConfig.uri)")
+
+echo "Creating/updating daily monitor job: ${MONITOR_JOB}..."
+gcloud scheduler jobs create http "${MONITOR_JOB}" \
+  --project="${PROJECT}" \
+  --location="${REGION}" \
+  --schedule="0 15 * * *" \
+  --uri="${MONITOR_URI}" \
+  --oidc-service-account-email="${GEOCODER_SERVICE_ACCOUNT}" \
+  --oidc-token-audience="${MONITOR_URI}" \
+  --http-method=POST \
+  --description="Daily — checks run freshness, logs stale/missing runs to pipeline_errors (15:00 UTC)" \
+  2>/dev/null \
+  || gcloud scheduler jobs update http "${MONITOR_JOB}" \
+    --project="${PROJECT}" \
+    --location="${REGION}" \
+    --schedule="0 15 * * *" \
+    --uri="${MONITOR_URI}" \
+    --oidc-service-account-email="${GEOCODER_SERVICE_ACCOUNT}" \
+    --oidc-token-audience="${MONITOR_URI}" \
+    --http-method=POST
+
 echo ""
 echo "Done."
 echo "  Daily  (incremental): ${DAILY_JOB}  — Mon-Sun 12:00 UTC, new stores only"
 echo "  Weekly (full):        ${WEEKLY_JOB} — Sundays 12:00 UTC, re-matches everything"
 echo "  Daily  (geocoder):    ${GEOCODER_JOB} — Mon-Sun 14:00 UTC, fills missing lat/lng/zip"
+echo "  Daily  (monitor):     ${MONITOR_JOB} — Mon-Sun 15:00 UTC, freshness backstop"
 echo ""
 echo "To trigger manually:"
 echo "  Incremental: gcloud scheduler jobs run ${DAILY_JOB}  --project=${PROJECT} --location=${REGION}"
 echo "  Full:        gcloud scheduler jobs run ${WEEKLY_JOB} --project=${PROJECT} --location=${REGION}"
 echo "  Geocoder:    gcloud scheduler jobs run ${GEOCODER_JOB} --project=${PROJECT} --location=${REGION}"
+echo "  Monitor:     gcloud scheduler jobs run ${MONITOR_JOB} --project=${PROJECT} --location=${REGION}"

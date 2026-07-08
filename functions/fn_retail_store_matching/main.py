@@ -11,6 +11,8 @@ import functions_framework
 from google.cloud import bigquery
 from rapidfuzz import fuzz
 
+from error_log import log_error, log_run
+
 PROJECT = "product-analytics-389809"
 DATASET = "retail_stores"
 UNIFIED_TABLE = "account_universe"
@@ -487,6 +489,7 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
     chunk: list[dict] = []
     first_write = True
     processed = 0
+    matched_stores = 0
 
     for store in _stream_stores(client, mode):
         processed += 1
@@ -515,6 +518,10 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
                 "revenue_per_case":  rec.revenue_per_case if rec else None,
             })
 
+        store_matched = any(d["matched"] for d in dist_matches)
+        if store_matched:
+            matched_stores += 1
+
         chunk.append({
             "store_id":        store["store_id"],
             "brand":           store.get("brand"),
@@ -534,7 +541,7 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
             "review_count":    store.get("review_count"),
             "nj_abc_license_number": store.get("nj_abc_license_number"),
             "distributor_matches": dist_matches,
-            "sarene_flag":         any(d["matched"] for d in dist_matches),
+            "sarene_flag":         store_matched,
             "place_id": None,
             "lat":      None,
             "lng":      None,
@@ -562,6 +569,16 @@ def _run_matching(client: bigquery.Client, mode: str) -> None:
     for dist_name, dist_records, _, _, _, _ in dist_indexes:  # FIX 4
         print(f"Distributor '{dist_name}': {len(dist_records)} records loaded")
 
+    # Function-level data check: a full run that processes stores but matches
+    # none almost always means the distributor load came back empty/broken.
+    if mode == "full" and processed > 0 and matched_stores == 0:
+        log_error(
+            "fn-retail-store-matching", "zero_stores_matched",
+            f"Full run processed {processed} stores but matched 0 — distributor load likely empty.",
+            severity="ERROR", test_type="function",
+            context={"processed": processed, "matched": 0}, client=client,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Entry point — HTTP trigger (called by Cloud Scheduler)
@@ -573,5 +590,16 @@ def fn_retail_store_matching(request):
     if mode not in ("incremental", "full"):
         return f"Invalid mode '{mode}'. Use 'incremental' or 'full'.", 400
     client = bigquery.Client(project=PROJECT)
-    _run_matching(client, mode)
+    try:
+        _run_matching(client, mode)
+    except Exception as exc:  # noqa: BLE001 — record infra failure, then re-raise
+        log_error(
+            "fn-retail-store-matching", "unhandled_exception", str(exc),
+            severity="ERROR", test_type="infrastructure",
+            context={"mode": mode}, client=client,
+        )
+        raise
+    # Heartbeat: proof the run happened (even a no-op incremental run), so the
+    # monitor can tell "nothing to do" apart from "scheduler never fired".
+    log_run("fn-retail-store-matching", "success", mode=mode, client=client)
     return f"OK ({mode})", 200

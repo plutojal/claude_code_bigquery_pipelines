@@ -34,6 +34,7 @@ REGION=us-central1
 | `fn-retail-store-scrape-processor` | Normalises raw scrape files | `stores_normalized` | (triggered by upload) |
 | `fn-retail-store-matching` | Matches stores to distributor accounts | `account_universe` | daily 12:00 UTC (incremental), Sun 12:00 UTC (full) |
 | `fn-store-geocoder` | Geocodes stores missing lat/lng | `store_geocodes` | daily 14:00 UTC |
+| `fn-pipeline-monitor` | Freshness backstop; logs stale runs | `pipeline_errors` | daily 15:00 UTC |
 
 Dataform builds the `int_*` and `mart_*` models that sit between and after
 these functions. This repo owns the raw tables, the functions, and the
@@ -192,6 +193,7 @@ bash create_scheduler.sh
 | `retail-store-matching-daily` | `0 12 * * *` | matching `?mode=incremental` |
 | `retail-store-matching-weekly` | `0 12 * * 0` | matching `?mode=full` |
 | `store-geocoder-daily` | `0 14 * * *` | geocoder (full backlog) |
+| `pipeline-monitor-daily` | `0 15 * * *` | monitor (freshness backstop) |
 
 Fire a job by hand:
 
@@ -228,6 +230,43 @@ gcloud beta run services logs tail FUNCTION_NAME --project=$PROJECT --region=$RE
 ```
 
 ---
+
+## Running the tests
+
+The pytest suite covers the pure logic (normalisation, matching layers +
+false-positive regressions, geocoder parsing, store_id) with no cloud
+dependencies. It runs in CI on every push (`.github/workflows/tests.yml`), and
+you can run it locally:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+## Monitoring
+
+Failures are logged to two BigQuery tables, not straight to Slack (a separate
+notifier function, outside this repo, posts from the table):
+
+- `pipeline_errors` — failed checks (function data checks + infrastructure).
+- `pipeline_runs` — a heartbeat per successful run; `fn-pipeline-monitor` reads
+  it to catch a scheduler that never fired.
+
+Check the current alert backlog by hand any time:
+
+```bash
+bq query --nouse_legacy_sql \
+'SELECT occurred_at, component, check_name, severity, message
+ FROM `product-analytics-389809.retail_stores.pipeline_errors`
+ WHERE notified = FALSE OR notified IS NULL
+ ORDER BY occurred_at DESC LIMIT 50'
+```
+
+Fire the freshness monitor by hand:
+
+```bash
+gcloud scheduler jobs run pipeline-monitor-daily --project=$PROJECT --location=$REGION
+```
 
 ## Common errors and fixes
 

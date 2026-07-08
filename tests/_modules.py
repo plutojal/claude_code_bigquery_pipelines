@@ -7,10 +7,18 @@ created until a function actually runs).
 """
 
 import importlib.util
+import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _FUNCTIONS = _ROOT / "functions"
+
+# Each function folder is on sys.path at runtime (Cloud Functions adds the
+# source dir), so main.py does sibling imports like `from error_log import ...`.
+# Replicate that here so the modules import under test.
+for _fn_dir in _FUNCTIONS.iterdir():
+    if _fn_dir.is_dir():
+        sys.path.insert(0, str(_fn_dir))
 
 
 def _load(name: str, path: Path):
