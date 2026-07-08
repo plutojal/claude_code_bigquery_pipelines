@@ -51,6 +51,15 @@ bq --project_id="${PROJECT}" mk \
   "${PROJECT}:${DATASET}.store_geocodes" \
   "schemas/store_geocodes.json" || echo "Table already exists, skipping."
 
+echo "Creating BigQuery table ${DATASET}.pipeline_errors..."
+bq --project_id="${PROJECT}" mk \
+  --table \
+  --time_partitioning_type=DAY \
+  --time_partitioning_field=occurred_at \
+  --description="Central error/test-failure log; polled by the external Slack notifier" \
+  "${PROJECT}:${DATASET}.pipeline_errors" \
+  "schemas/pipeline_errors.json" || echo "Table already exists, skipping."
+
 # Add any columns introduced after initial table creation (idempotent via IF NOT EXISTS).
 echo "Applying schema migrations..."
 bq --project_id="${PROJECT}" query --nouse_legacy_sql <<'SQL' || echo "Warning: schema migration failed — run manually."

@@ -241,6 +241,53 @@ All in dataset `product-analytics-389809.retail_stores`.
 
 ---
 
+## 4a. Error logging & Slack alerting
+
+Monitoring is split in two on purpose:
+
+- **This repo writes failures to a table.** Each function calls
+  `log_error(...)` (from `error_log.py`, an identical copy in every function
+  folder) when a check fails — either a **function** test (a data-quality check
+  inside the function, e.g. "zero stores matched") or an **infrastructure**
+  test (run/scheduler/deploy health). The row lands in
+  `retail_stores.pipeline_errors` with `notified = FALSE`.
+
+- **A separate function, outside this codebase, sends Slack messages.** It polls
+  `pipeline_errors` for `notified = FALSE`, posts each to the #data-pipelines
+  channel, and sets `notified = TRUE`. Keeping it external means **no Slack
+  webhook or secret lives in this repo.**
+
+The contract between the two is just the table. The Slack notifier does roughly:
+
+```sql
+-- read the backlog
+SELECT * FROM `product-analytics-389809.retail_stores.pipeline_errors`
+WHERE notified = FALSE OR notified IS NULL
+ORDER BY occurred_at;
+
+-- after posting, mark them done
+UPDATE `product-analytics-389809.retail_stores.pipeline_errors`
+SET notified = TRUE
+WHERE error_id IN (...posted ids...);
+```
+
+To log a failure from inside a function:
+
+```python
+from error_log import log_error
+
+log_error(
+    component="fn-retail-store-matching",
+    check_name="zero_stores_matched",
+    message="Full run matched 0 stores — distributor load likely empty.",
+    severity="ERROR",
+    test_type="function",
+    context={"mode": "full", "stores": 5891, "matched": 0},
+)
+```
+
+`log_error` never raises — a logging failure must not crash the pipeline.
+
 ## 5. Notes for the next maintainer
 
 Things that will bite you if you don't know them:
