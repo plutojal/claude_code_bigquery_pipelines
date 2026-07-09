@@ -240,7 +240,7 @@ All in dataset `product-analytics-389809.retail_stores`.
 | `account_universe` | this repo (matching fn) | Stores + `distributor_matches` + flags. |
 | `store_geocodes` | this repo (geocoder fn) | Geocoded lat/lng/zip lookup. |
 | `zip_lookup` | this repo (`load_zip_lookup.py`) | US zip reference data. |
-| `pipeline_errors` | this repo (functions via `log_error`) | Failed-check log; polled by the external Slack notifier. |
+| `pipeline_errors` | this repo (functions via `log_error`) | Append-only failed-check log; read by the data-monitoring Dataform assertion. |
 | `pipeline_runs` | this repo (functions via `log_run`) | Run heartbeats; read by `fn-pipeline-monitor` for freshness. |
 | `mart_stores` / `mart_store_locator` | Dataform | Final dashboard models. |
 
@@ -254,13 +254,14 @@ Monitoring is split in two on purpose:
   `log_error(...)` (from `error_log.py`, an identical copy in every function
   folder) when a check fails — either a **function** test (a data-quality check
   inside the function, e.g. "zero stores matched") or an **infrastructure**
-  test (run/scheduler/deploy health). The row lands in
-  `retail_stores.pipeline_errors` with `notified = FALSE`.
+  test (run/scheduler/deploy health). The row is appended to
+  `retail_stores.pipeline_errors`.
 
-- **A separate function, outside this codebase, sends Slack messages.** It polls
-  `pipeline_errors` for `notified = FALSE`, posts each to the #data-pipelines
-  channel, and sets `notified = TRUE`. Keeping it external means **no Slack
-  webhook or secret lives in this repo.**
+- **The data-monitoring Dataform project alerts Slack.** It DECLAREs
+  `pipeline_errors` as an external source and runs a **time-windowed
+  assertion** — fail if there are any `severity = 'ERROR'` rows in the last N
+  hours. A failing assertion drives that project's Slack notification. No Slack
+  webhook or secret lives in this repo.
 
 Two kinds of failure are covered:
 
@@ -275,19 +276,13 @@ Two kinds of failure are covered:
   heartbeat is written even on a no-op incremental run: it distinguishes
   "nothing to do" from "never fired."
 
-The contract between the two is just the table. The Slack notifier does roughly:
-
-```sql
--- read the backlog
-SELECT * FROM `product-analytics-389809.retail_stores.pipeline_errors`
-WHERE notified = FALSE OR notified IS NULL
-ORDER BY occurred_at;
-
--- after posting, mark them done
-UPDATE `product-analytics-389809.retail_stores.pipeline_errors`
-SET notified = TRUE
-WHERE error_id IN (...posted ids...);
-```
+**Why windowed, not a `notified` flag?** `pipeline_errors` is an append-only
+audit log — it is never refreshed or truncated, so history is preserved. A
+Dataform assertion is read-only (it can't mark rows "seen"), so instead of a
+`notified` column the assertion looks only at a recent time window and
+self-clears once errors stop. A persistent failure keeps re-logging on each
+daily run, so it stays red until fixed. The reference assertion +
+declaration live in `docs/dataform/` (they belong in the Dataform project).
 
 To log a failure from inside a function:
 
@@ -340,13 +335,15 @@ Things that will bite you if you don't know them:
   harmless gcloud display bug** (note the mangled email). It does not mean your
   command failed — read the final result line.
 
-- **Monitoring is in place but depends on the external Slack function.** This
-  repo logs failures to `pipeline_errors` and run heartbeats to `pipeline_runs`,
-  and `fn-pipeline-monitor` flags stale runs — but nothing reaches Slack until
-  the separate notifier function (polls `pipeline_errors WHERE notified = FALSE`)
-  is built and scheduled. Until then, watch the table directly:
-  `SELECT * FROM retail_stores.pipeline_errors WHERE notified = FALSE`.
+- **Monitoring depends on the data-monitoring Dataform project.** This repo logs
+  failures to `pipeline_errors` and run heartbeats to `pipeline_runs`, and
+  `fn-pipeline-monitor` flags stale runs — but nothing reaches Slack until the
+  Dataform assertion in `docs/dataform/` is added to that project and its Slack
+  integration is wired. Until then, watch the table directly:
+  `SELECT * FROM retail_stores.pipeline_errors WHERE occurred_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)`.
 
-- **What still needs doing** (scoped but not built): the external Slack notifier
-  function; broader Dataform assertions on the `int_*` / `mart_*` models. The
-  pytest suite (`tests/`) covers the function logic and runs in CI on every push.
+- **What still needs doing** (scoped but not built): add the Dataform assertion +
+  declaration from `docs/dataform/` to the data-monitoring project and wire its
+  Slack notification; broader Dataform assertions on the `int_*` / `mart_*`
+  models. The pytest suite (`tests/`) covers the function logic and runs in CI
+  on every push.

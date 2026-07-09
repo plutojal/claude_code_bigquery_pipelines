@@ -1,13 +1,14 @@
 """Shared error/test-result logger — appends failures to retail_stores.pipeline_errors.
 
-A SEPARATE Slack-notifier function (outside this codebase) polls this table for
-rows where notified = FALSE, posts them to Slack, and marks them notified. Keeping
-the Slack integration external means this repo holds no webhook URL or secret.
+pipeline_errors is an append-only audit log. The data-monitoring Dataform
+project reads it with a time-windowed assertion ("fail if any ERROR rows in the
+last N hours") that alerts Slack and self-clears once errors stop — so there is
+NO notified flag and nothing here ever updates or deletes rows.
 
 SYNC: this file is duplicated verbatim in every function folder
-(fn_retail_store_matching, fn_store_geocoder, fn_retail_store_scrape_processor)
-because each Cloud Function deploys from its own source dir. If you change one,
-change all copies.
+(fn_retail_store_matching, fn_store_geocoder, fn_retail_store_scrape_processor,
+fn_pipeline_monitor) because each Cloud Function deploys from its own source
+dir. If you change one, change all copies.
 """
 
 import json
@@ -59,7 +60,6 @@ def log_error(
         "message": message,
         "context": json.dumps(context) if context is not None else None,
         "run_id": run_id,
-        "notified": False,
     }
     try:
         errors = client.insert_rows_json(f"{PROJECT}.{DATASET}.{ERROR_TABLE}", [row])

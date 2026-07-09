@@ -5,8 +5,7 @@
   {"name": "test_type",   "type": "STRING",    "mode": "NULLABLE", "description": "'function' (data check inside a function) or 'infrastructure' (run/deploy/scheduler health)"},
   {"name": "check_name",  "type": "STRING",    "mode": "REQUIRED", "description": "Short slug of the failed check, e.g. zero_stores_matched"},
   {"name": "severity",    "type": "STRING",    "mode": "REQUIRED", "description": "ERROR or WARNING"},
-  {"name": "message",     "type": "STRING",    "mode": "NULLABLE", "description": "Human-readable detail for the Slack message"},
+  {"name": "message",     "type": "STRING",    "mode": "NULLABLE", "description": "Human-readable detail for the alert"},
   {"name": "context",     "type": "STRING",    "mode": "NULLABLE", "description": "Optional JSON-encoded structured detail (counts, ids, etc.)"},
-  {"name": "run_id",      "type": "STRING",    "mode": "NULLABLE", "description": "Correlates rows from the same function run"},
-  {"name": "notified",    "type": "BOOLEAN",   "mode": "NULLABLE", "description": "FALSE until the external Slack notifier posts it, then set TRUE"}
+  {"name": "run_id",      "type": "STRING",    "mode": "NULLABLE", "description": "Correlates rows from the same function run"}
 ]

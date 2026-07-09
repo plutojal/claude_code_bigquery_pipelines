@@ -245,20 +245,21 @@ pytest
 
 ## Monitoring
 
-Failures are logged to two BigQuery tables, not straight to Slack (a separate
-notifier function, outside this repo, posts from the table):
+Failures are logged to two BigQuery tables, not straight to Slack. The
+data-monitoring Dataform project reads `pipeline_errors` with a time-windowed
+assertion and drives the Slack alert (see `docs/dataform/`):
 
-- `pipeline_errors` — failed checks (function data checks + infrastructure).
+- `pipeline_errors` — append-only log of failed checks (function + infrastructure).
 - `pipeline_runs` — a heartbeat per successful run; `fn-pipeline-monitor` reads
   it to catch a scheduler that never fired.
 
-Check the current alert backlog by hand any time:
+Check recent errors by hand any time (same window the assertion uses):
 
 ```bash
 bq query --nouse_legacy_sql \
 'SELECT occurred_at, component, check_name, severity, message
  FROM `product-analytics-389809.retail_stores.pipeline_errors`
- WHERE notified = FALSE OR notified IS NULL
+ WHERE occurred_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
  ORDER BY occurred_at DESC LIMIT 50'
 ```
 
