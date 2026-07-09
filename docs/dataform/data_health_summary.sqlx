@@ -1,0 +1,59 @@
+-- REFERENCE COPY — belongs in the data-health Dataform project, not this repo.
+--
+-- One row per scheduled pipeline component: when it last ran, whether that's
+-- stale, and how many errors it logged in the last 24h. A view (not a table)
+-- so it's always live — point a dashboard at it, or eyeball it directly.
+--
+-- health_status:
+--   NO_RUNS — no successful run ever recorded (never deployed / never fired)
+--   STALE   — last successful run older than its threshold (scheduler issue)
+--   ERRORS  — ran recently but logged one or more ERRORs in the last 24h
+--   OK      — ran within threshold, no recent errors
+--
+-- Thresholds must match the schedules in create_scheduler.sh. The scrape
+-- processor is event-driven (triggered by bucket uploads, not scheduled), so
+-- it is deliberately not freshness-checked here.
+
+config {
+  type: "view",
+  description: "Per-component pipeline health: last run, staleness, and 24h error count.",
+}
+
+WITH expected AS (
+  SELECT 'fn-retail-store-matching' AS component, 26 AS max_age_hours UNION ALL
+  SELECT 'fn-store-geocoder',        26 UNION ALL
+  SELECT 'fn-pipeline-monitor',      26
+),
+
+last_runs AS (
+  SELECT component, MAX(finished_at) AS last_success_at
+  FROM ${ref("pipeline_runs")}
+  WHERE status = 'success'
+  GROUP BY component
+),
+
+recent_errors AS (
+  SELECT component, COUNT(*) AS errors_24h
+  FROM ${ref("pipeline_errors")}
+  WHERE severity = 'ERROR'
+    AND occurred_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+  GROUP BY component
+)
+
+SELECT
+  e.component,
+  r.last_success_at,
+  TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), r.last_success_at, HOUR) AS hours_since_success,
+  e.max_age_hours,
+  IFNULL(err.errors_24h, 0) AS errors_24h,
+  CASE
+    WHEN r.last_success_at IS NULL THEN 'NO_RUNS'
+    WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), r.last_success_at, HOUR) > e.max_age_hours THEN 'STALE'
+    WHEN IFNULL(err.errors_24h, 0) > 0 THEN 'ERRORS'
+    ELSE 'OK'
+  END AS health_status,
+  CURRENT_TIMESTAMP() AS checked_at
+FROM expected e
+LEFT JOIN last_runs r USING (component)
+LEFT JOIN recent_errors err USING (component)
+ORDER BY component

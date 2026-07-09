@@ -1,0 +1,11 @@
+-- REFERENCE COPY — belongs in the data-health Dataform project, not this repo.
+-- account_universe is written by fn-retail-store-matching. Declared here so the
+-- data-health assertions can sanity-check the pipeline's main output table.
+
+config {
+  type: "declaration",
+  database: "product-analytics-389809",
+  schema: "retail_stores",
+  name: "account_universe",
+  description: "Matched store records with distributor_matches — the matching function's output.",
+}

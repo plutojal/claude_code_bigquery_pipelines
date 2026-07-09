@@ -1,0 +1,31 @@
+-- REFERENCE COPY — belongs in the data-health Dataform project, not this repo.
+--
+-- Sanity checks on the matching function's main output table. Fails (returns
+-- rows) if the table is empty, has duplicate store_ids, or a full run appears
+-- to have matched nothing (every distributor_match unmatched). Each failure
+-- row names the check so the alert is actionable.
+
+config {
+  type: "assertion",
+}
+
+-- Empty table — the matcher wrote nothing.
+SELECT 'account_universe_empty' AS failed_check, CAST(NULL AS STRING) AS store_id
+FROM ${ref("account_universe")}
+HAVING COUNT(*) = 0
+
+UNION ALL
+
+-- store_id must be unique (it's the primary key / MERGE key).
+SELECT 'duplicate_store_id' AS failed_check, store_id
+FROM ${ref("account_universe")}
+GROUP BY store_id
+HAVING COUNT(*) > 1
+
+UNION ALL
+
+-- Table has rows but not a single one matched a distributor — almost always a
+-- broken distributor load rather than a real "zero customers" state.
+SELECT 'no_stores_matched' AS failed_check, CAST(NULL AS STRING) AS store_id
+FROM ${ref("account_universe")}
+HAVING COUNT(*) > 0 AND COUNTIF(sarene_flag) = 0
