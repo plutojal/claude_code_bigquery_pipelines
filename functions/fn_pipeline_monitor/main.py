@@ -13,7 +13,7 @@ Runs on its own daily schedule (see create_scheduler.sh).
 import functions_framework
 from google.cloud import bigquery
 
-from error_log import log_error
+from error_log import log_error, log_run
 
 PROJECT = "product-analytics-389809"
 DATASET = "retail_stores"
@@ -66,5 +66,15 @@ def _check_freshness(client: bigquery.Client) -> int:
 @functions_framework.http
 def fn_pipeline_monitor(request):
     client = bigquery.Client(project=PROJECT)
-    issues = _check_freshness(client)
+    try:
+        issues = _check_freshness(client)
+    except Exception as exc:  # noqa: BLE001 — record infra failure, then re-raise
+        log_error(
+            "fn-pipeline-monitor", "unhandled_exception", str(exc),
+            severity="ERROR", test_type="infrastructure", client=client,
+        )
+        raise
+    # The monitor heartbeats too, so assert_pipeline_runs_fresh can catch the
+    # watcher itself dying — the one failure the monitor can't self-report.
+    log_run("fn-pipeline-monitor", "success", client=client)
     return f"OK ({issues} freshness issue(s) logged)", 200
